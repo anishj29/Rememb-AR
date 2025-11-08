@@ -14,10 +14,33 @@ extension Notification.Name {
 struct ContentView: View {
     @State private var showHello = false
     @State private var meshOn = false
+    @State private var showPopup = false
 
     var body: some View {
         ZStack {
             ARViewContainer().ignoresSafeArea()
+            
+            if showPopup {
+                    Color.black.opacity(0.5)
+                        .ignoresSafeArea()
+                        .onTapGesture { withAnimation { showPopup = false } }
+
+                    VStack {
+                        Image("IMG_0832")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 300)
+                            .cornerRadius(16)
+                            .shadow(radius: 10)
+                            .padding()
+
+                        Button("Close") {
+                            withAnimation { showPopup = false }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .transition(.scale.combined(with: .opacity))
+                }
 
             VStack(spacing: 12) {
                 Text("Scan slowly.\nTap a flower → popup")
@@ -49,10 +72,9 @@ struct ContentView: View {
             .padding(.horizontal, 12)
         }
         .onReceive(NotificationCenter.default.publisher(for: .flowerTapped)) { _ in
-            showHello = true
-        }
-        .alert("Hello World", isPresented: $showHello) {
-            Button("OK", role: .cancel) {}
+            withAnimation(.spring()) {
+                showPopup = true
+            }
         }
     }
 }
@@ -119,8 +141,11 @@ struct ARViewContainer: UIViewRepresentable {
         private var flowerCachedOriginal: ModelEntity?
         private var hasAutoScattered = false
         private var gardenAnchors: [AnchorEntity] = []
-        
-        
+
+        // NEW: monitoring
+        private var lastFlowerVisibleTime: Date = .now
+        private var visibilityTimer: Timer?
+
         // Load once, then clone for each placement
         private func loadFlowerModel() -> ModelEntity {
             if let cached = flowerCachedOriginal {
@@ -137,7 +162,7 @@ struct ARViewContainer: UIViewRepresentable {
         }
 
         // Make the model feel “right” in AR: fix base to ground, normalize size, add shadow
-        private func normalizeAndGround(_ entity: ModelEntity, targetHeight: Float = 0.20) {
+        private func normalizeAndGround(_ entity: ModelEntity, targetHeight: Float = 0.15) {
             // 1) Normalize height (so different assets feel consistent)
             let bounds = entity.visualBounds(relativeTo: nil)
             let currentHeight = max(0.001, bounds.extents.y)
@@ -161,7 +186,7 @@ struct ARViewContainer: UIViewRepresentable {
             shadow.position.y = 0.001
             entity.addChild(shadow)
         }
-        
+
         private func plantFlower(at transform: float4x4) {
             guard let arView else { return }
             let anchor = AnchorEntity(world: transform)
@@ -169,16 +194,21 @@ struct ARViewContainer: UIViewRepresentable {
             // Load USDZ or fallback
             let flower = loadFlowerModel()
             // Normalize + ground to surface
-            normalizeAndGround(flower, targetHeight: 0.20)
+            let randomHeight: Float = Float.random(in: 0.13...0.18)
+            normalizeAndGround(flower, targetHeight: randomHeight)
 
+            let widthScale: Float = Float.random(in: 0.9...1.1)
+            flower.scale.x *= widthScale
+            flower.scale.z *= widthScale
+            
             // (Optional) slight randomization so a cluster looks natural
             flower.orientation *= simd_quatf(angle: Float.random(in: -0.25...0.25), axis: [0,1,0])
             flower.scale *= Float.random(in: 0.9...1.15)
 
-            // Physics so it settles onto the LiDAR mesh
+            // Keep it static (no falling)
             let physMat = PhysicsMaterialResource.generate(friction: 0.9, restitution: 0.05)
             let body = PhysicsBodyComponent(massProperties: .default, material: physMat, mode: .static)
-            flower.components.set(body)                         // 'static' = no falling
+            flower.components.set(body)
             flower.generateCollisionShapes(recursive: true)
 
             // Name so taps can be recognized
@@ -189,6 +219,7 @@ struct ARViewContainer: UIViewRepresentable {
             arView.scene.addAnchor(anchor)
             gardenAnchors.append(anchor)
         }
+
         // Wire SwiftUI buttons
         func bindUI() {
             NotificationCenter.default.addObserver(forName: .toggleMesh, object: nil, queue: .main) { [weak self] note in
@@ -221,6 +252,9 @@ struct ARViewContainer: UIViewRepresentable {
             if case .normal = arView.session.currentFrame?.camera.trackingState ?? .notAvailable {
                 scatterFlowers(count: count)
                 hasAutoScattered = true
+
+                // start watching for "no flowers in view"
+                startFlowerMonitor()
             } else {
                 // re-check shortly, but won’t repeat after success
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
@@ -269,6 +303,76 @@ struct ARViewContainer: UIViewRepresentable {
             }
             if found {
                 NotificationCenter.default.post(name: .flowerTapped, object: nil)
+            }
+        }
+
+        // MARK: - NEW: monitoring logic
+
+        // start timer to check every second
+        func startFlowerMonitor() {
+            visibilityTimer?.invalidate()
+            visibilityTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+                self?.checkFlowerVisibility()
+            }
+            lastFlowerVisibleTime = .now
+        }
+
+        // every frame, see if any flower is in front of camera
+        func session(_ session: ARSession, didUpdate frame: ARFrame) {
+            guard let arView else { return }
+
+            let camTransform = frame.camera.transform
+            let camPos = simd_make_float3(camTransform.columns.3)
+            let forward = -simd_make_float3(camTransform.columns.2) // camera forward
+
+            var visibleCount = 0
+            for anchor in gardenAnchors {
+                guard let flower = anchor.children.first else { continue }
+                let pos = flower.position(relativeTo: nil)
+                let dir = normalize(pos - camPos)
+                let dot = simd_dot(dir, forward)
+                if dot > 0.5 && distance(pos, camPos) < 2.5 {
+                    visibleCount += 1
+                }
+            }
+
+            if visibleCount > 0 {
+                lastFlowerVisibleTime = .now
+            }
+        }
+
+        // called by timer
+        private func checkFlowerVisibility() {
+            guard let arView else { return }
+
+            let timeSinceSeen = Date().timeIntervalSince(lastFlowerVisibleTime)
+            
+            if timeSinceSeen > 1 {
+                for i in 0..<2 {
+                    // Wider scatter in screen space
+                    let center = CGPoint(
+                        x: arView.bounds.midX + CGFloat.random(in: -120...120),
+                        y: arView.bounds.midY + CGFloat.random(in: -120...120)
+                    )
+                    if let hit = arView.raycast(from: center,
+                                                allowing: .existingPlaneGeometry,
+                                                alignment: .any).first {
+
+                        var transform = hit.worldTransform
+
+                        // Apply a small world offset (in meters) for extra spacing
+                        let randomOffset = SIMD3<Float>(
+                            Float.random(in: -0.25...0.25),
+                            0,
+                            Float.random(in: -0.25...0.25)
+                        )
+                        transform.columns.3.x += randomOffset.x
+                        transform.columns.3.z += randomOffset.z
+
+                        plantFlower(at: transform)
+                    }
+                }
+                lastFlowerVisibleTime = .now
             }
         }
 

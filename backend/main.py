@@ -214,26 +214,42 @@ async def update_weights_by_similarity(data: SimilarityRequest):
                 continue
             
             # Create improved prompt for similarity comparison
-            # This prompt better understands memory-related queries and semantic relationships
-            prompt = f"""You are analyzing memory-related queries. Determine how relevant an image caption is to a memory query.
+            # This prompt emphasizes semantic and contextual understanding over word matching
+            prompt = f"""You are analyzing memory-related queries. Determine how semantically and contextually relevant an image caption is to a memory query.
 
 Query: {query}
 Image Caption: {caption}
 
-Consider that:
-- If the query mentions forgetting something (e.g., "forgetting women"), images related to that topic should have HIGH similarity
-- Semantic relationships matter: "women" relates to "woman", "female", etc.
-- The goal is to find images that help with memory recall for the query topic
+CRITICAL: Focus on SEMANTIC MEANING and CONTEXTUAL RELATIONSHIPS, NOT just word matching.
 
-Rate the relevance on a scale of 0 to 1:
-- 0.9-1.0: Directly related (e.g., query mentions "women" and caption contains "woman")
-- 0.7-0.89: Strongly related (semantically similar concepts)
-- 0.5-0.69: Moderately related
-- 0.0-0.49: Not related
+Key principles:
+1. **Contextual Understanding**: Understand the full meaning and relationships in the query, not just individual words.
+   - Example: Query "woman with an American husband" should match captions about marriages/relationships with Americans, NOT just any caption with "woman"
+   - "married to an American Actor" is highly relevant (0.9-1.0)
+   - "Woman sitting on table" is NOT relevant (0.0-0.3) even though it contains "woman"
+
+2. **Compound Concepts**: When the query combines multiple concepts (e.g., "woman" + "American husband"), prioritize captions that contain BOTH concepts or their semantic equivalents.
+   - Higher score if caption contains the full relationship/context
+   - Lower score if caption only matches one part of the concept
+
+3. **Semantic Relationships**: Understand synonyms, related terms, and contextual connections:
+   - "husband" relates to "married", "spouse", "partner", "actor" (if mentioned as spouse)
+   - "American" relates to "US", "United States", nationality contexts
+   - Don't just match keywords - understand the semantic meaning
+
+4. **Relevance Levels**:
+   - 0.9-1.0: Caption contains the EXACT semantic relationship/context from the query (e.g., query about "woman with American husband" matches "actress married to American Actor")
+   - 0.7-0.89: Caption contains most of the key concepts and relationships, with strong semantic similarity
+   - 0.4-0.69: Caption shares some concepts but missing key relationships or context
+   - 0.0-0.39: Caption only matches superficial keywords without the meaningful context/relationships
+
+5. **Avoid Word Matching Bias**: A caption that matches keywords but lacks the semantic relationship should score LOW, even if it contains matching words.
+
+Rate the relevance on a scale of 0 to 1 based on SEMANTIC and CONTEXTUAL similarity, not word overlap.
 
 Respond in the following format:
 Score: [number between 0 and 1]
-Reasoning: [brief explanation of why you chose this score]"""
+Reasoning: [brief explanation focusing on semantic/contextual relationships, not just word matching]"""
             
             try:
                 print(f"Calling Gemini API for document {doc.id}...")
@@ -312,6 +328,7 @@ Reasoning: [brief explanation of why you chose this score]"""
             "updated_images": results,
             "all_scores": all_scores  # Include all scores for debugging
         }
+
         
     except Exception as e:
         print("Similarity update error:", e)

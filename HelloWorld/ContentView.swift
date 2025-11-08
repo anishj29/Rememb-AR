@@ -11,36 +11,99 @@ extension Notification.Name {
     static let flowerTapped = Notification.Name("flowerTapped") // AR → SwiftUI
 }
 
+//struct LoginView: View {
+//    @State private var username = ""
+//    @State private var password = ""
+//    @State private var loggedIn = false
+//    @State private var showLoginError = false   // new
+//    @State private var errorMessage = ""        // new
+//
+//    var body: some View {
+//        if loggedIn {
+//            ContentView()
+//        } else {
+//            VStack(spacing: 16) {
+//                Text("Login to Continue")
+//                    .font(.title2)
+//                    .fontWeight(.semibold)
+//                    .padding(.bottom, 8)
+//
+//                TextField("Username", text: $username)
+//                    .textFieldStyle(RoundedBorderTextFieldStyle())
+//                    .autocapitalization(.none)
+//
+//                SecureField("Password", text: $password)
+//                    .textFieldStyle(RoundedBorderTextFieldStyle())
+//
+//                Button("Login") {
+//                    APIService.shared.login(username: username, password: password) { success, _ in
+//                        DispatchQueue.main.async {
+//                            if success {
+//                                loggedIn = true
+//                            } else {
+//                                errorMessage = "Invalid username or password"
+//                                showLoginError = true
+//                            }
+//                        }
+//                    }
+//                }
+//                .buttonStyle(.borderedProminent)
+//                .padding(.top, 8)
+//            }
+//            .padding()
+//            // Alert for failed login
+//            .alert(isPresented: $showLoginError) {
+//                Alert(
+//                    title: Text("Login Failed"),
+//                    message: Text(errorMessage),
+//                    dismissButton: .default(Text("OK"))
+//                )
+//            }
+//        }
+//    }
+//}
+
 struct ContentView: View {
     @State private var showHello = false
     @State private var meshOn = false
     @State private var showPopup = false
-
+    @State private var showConnectionAlert = false
+    @State private var connectionMessage = ""
+    @State private var currentMemory: MediaItem?
+    
     var body: some View {
         ZStack {
             ARViewContainer().ignoresSafeArea()
             
-            if showPopup {
-                    Color.black.opacity(0.5)
-                        .ignoresSafeArea()
-                        .onTapGesture { withAnimation { showPopup = false } }
+            if showPopup, let memory = currentMemory {
+                Color.black.opacity(0.5)
+                    .ignoresSafeArea()
+                    .onTapGesture { withAnimation { showPopup = false } }
 
-                    VStack {
-                        Image("IMG_0832")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxWidth: 300)
-                            .cornerRadius(16)
-                            .shadow(radius: 10)
-                            .padding()
-
-                        Button("Close") {
-                            withAnimation { showPopup = false }
-                        }
-                        .buttonStyle(.borderedProminent)
+                VStack {
+                    AsyncImage(url: URL(string: memory.url)) { image in
+                        image.resizable()
+                             .scaledToFit()
+                             .frame(maxWidth: 300)
+                             .cornerRadius(16)
+                             .shadow(radius: 10)
+                             .padding()
+                    } placeholder: {
+                        ProgressView()
                     }
-                    .transition(.scale.combined(with: .opacity))
+
+                    Text(memory.caption)
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .padding()
+
+                    Button("Close") {
+                        withAnimation { showPopup = false }
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
+                .transition(.scale.combined(with: .opacity))
+            }
 
             VStack(spacing: 12) {
                 Text("Scan slowly.\nTap a flower → popup")
@@ -64,6 +127,28 @@ struct ContentView: View {
                         NotificationCenter.default.post(name: .clearGarden, object: nil)
                     }
                     .buttonStyle(.bordered)
+
+                    Button("Test Backend Connection") {
+                        connectionMessage = "Checking..."
+                        showConnectionAlert = true
+                        
+                        print("🌐 Attempting to contact backend at \(APIService.shared.baseURL)/random_memories")
+                        
+                        APIService.shared.fetchRandomMemories { items in
+                            DispatchQueue.main.async {
+                                if items.isEmpty {
+                                    connectionMessage = "⚠️ Backend not reachable or no media uploaded."
+                                } else {
+                                    connectionMessage = "✅ Connected! Received \(items.count) memories."
+                                }
+                                showConnectionAlert = true
+                            }
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .alert(isPresented: $showConnectionAlert) {
+                        Alert(title: Text("Backend Connection"), message: Text(connectionMessage), dismissButton: .default(Text("OK")))
+                    }
                 }
 
                 Spacer()
@@ -72,8 +157,12 @@ struct ContentView: View {
             .padding(.horizontal, 12)
         }
         .onReceive(NotificationCenter.default.publisher(for: .flowerTapped)) { _ in
-            withAnimation(.spring()) {
-                showPopup = true
+            // When user taps a flower, fetch random media from backend
+            APIService.shared.fetchRandomMemories { items in
+                if let first = items.first {
+                    currentMemory = first
+                    withAnimation(.spring()) { showPopup = true }
+                }
             }
         }
     }
@@ -214,7 +303,9 @@ struct ARViewContainer: UIViewRepresentable {
             // Name so taps can be recognized
             flower.name = "flower-\(UUID().uuidString)"
             flower.generateCollisionShapes(recursive: true)
-
+            
+            
+            
             anchor.addChild(flower)
             arView.scene.addAnchor(anchor)
             gardenAnchors.append(anchor)

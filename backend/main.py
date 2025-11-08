@@ -1,11 +1,11 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import firebase_admin
 from firebase_admin import credentials, firestore, storage
 import traceback
 from fastapi.responses import JSONResponse
-from random import sample, choices
+from random import random
 from typing import List
 import os
 import re
@@ -66,7 +66,8 @@ async def upload_media(
         blob = bucket.blob(unique_filename)
         blob.upload_from_string(contents, content_type=file.content_type)
         
-        media_url = blob.generate_signed_url(version="v4", expiration=86400)  # 1 hour signed URL
+        # Comment fixed: This is a 24-hour signed URL
+        media_url = blob.generate_signed_url(version="v4", expiration=86400)  # 24 hour signed URL
         
         from datetime import datetime
         media_data = {
@@ -101,69 +102,74 @@ def media_list():
         })
     return media_items
 
-# In-memory store of shown memory IDs - resets on backend restart
-shown_memory_ids = set()
+# --- MODIFIED ENDPOINT ---
 
 @app.get("/random_memories")
-def random_memories():
-    media_ref = db.collection("media")
-    docs = media_ref.stream()
-    all_memories = [(doc.id, doc.to_dict()) for doc in docs]
+def random_memories(k: int = Query(default=1, ge=1, description="Number of random memories to return")):
+    """
+    Get 'k' random memories using A-ES weighted random sampling without replacement.
+    
+    This algorithm ensures that:
+    1. Items with higher weights are proportionally more likely to be selected.
+    2. 'k' distinct items are returned (sampling without replacement).
+    3. It is stateless (no 'shown_memory_ids') and robust for a server.
+       
+    Algorithm (A-ES by Efraimidis and Spirakis):
+    - For each item 'i' with weight 'w_i', calculate a key = random()^(1/w_i).
+    - Select the 'k' items with the largest keys.
+    """
+    try:
+        media_ref = db.collection("media")
+        docs = media_ref.stream()
+        
+        weighted_items = []
+        
+        for doc in docs:
+            mem = doc.to_dict()
+            if not mem:
+                continue
 
-    unseen = [(id, mem) for id, mem in all_memories if id not in shown_memory_ids]
-    if not unseen:
-        shown_memory_ids.clear()
-        unseen = all_memories
-    
-    count = min(len(unseen), 3)
-    
-    # Weighted random selection: higher weights = higher probability
-    # Extract weights for unseen memories
-    weights = [mem.get("weight", 1.0) for _, mem in unseen]
-    
-    # Use weighted random selection (with replacement, then deduplicate)
-    # We'll select more than needed and deduplicate to avoid repeats
-    selected_with_duplicates = choices(unseen, weights=weights, k=count * 2)
-    
-    # Deduplicate while preserving order
-    seen_ids = set()
-    selected = []
-    for item in selected_with_duplicates:
-        id, mem = item
-        if id not in seen_ids and len(selected) < count:
-            selected.append(item)
-            seen_ids.add(id)
-    
-    # If we still don't have enough after deduplication, fill with remaining items
-    if len(selected) < count:
-        remaining = [(id, mem) for id, mem in unseen if id not in seen_ids]
-        if remaining:
-            # Use weighted selection for remaining items
-            remaining_weights = [mem.get("weight", 1.0) for _, mem in remaining]
-            additional = choices(remaining, weights=remaining_weights, k=count - len(selected))
-            # Deduplicate again
-            for item in additional:
-                id, mem = item
-                if id not in seen_ids:
-                    selected.append(item)
-                    seen_ids.add(id)
-                    if len(selected) >= count:
-                        break
+            # Ensure weight is positive (minimum 0.1)
+            weight = max(mem.get("weight", 1.0), 0.1)  
+            rand_val = random()  # Generates a float in [0.0, 1.0)
+            
+            # Handle the edge case of rand_val = 0.0 to avoid math domain error
+            if rand_val == 0.0:
+                 key = float('inf') # Assign a very large key
+            else:
+                 # This is the core of the algorithm
+                 key = rand_val ** (1.0 / weight)
+            
+            item_data = {
+                "id": doc.id,
+                "filename": mem.get("filename"),
+                "url": mem.get("url"),
+                "caption": mem.get("caption", ""),
+                "weight": mem.get("weight", 1.0),
+                "uploaded_at": mem.get("uploaded_at"),
+            }
+            weighted_items.append((key, item_data))
 
-    for id, _ in selected:
-        shown_memory_ids.add(id)
+        if not weighted_items:
+            return []
+            
+        # Sort by the calculated key in descending order
+        weighted_items.sort(key=lambda x: x[0], reverse=True)
+        
+        # Get the number of items to return, capped by the total available
+        num_to_return = min(k, len(weighted_items))
+        
+        # Extract the 'item_data' from the top 'k' tuples
+        selected_memories = [item for key, item in weighted_items[:num_to_return]]
+        
+        return selected_memories
 
-    return [
-        {
-            "id": id,
-            "filename": mem.get("filename"),
-            "url": mem.get("url"),
-            "caption": mem.get("caption", ""),
-            "weight": mem.get("weight", 1.0),
-            "uploaded_at": mem.get("uploaded_at"),
-        }
-        for id, mem in selected
-    ]
+    except Exception as e:
+        print("Random memories error:", e)
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Failed to retrieve random memories")
+
+# --- END OF MODIFIED ENDPOINT ---
 
 class SimilarityRequest(BaseModel):
     query: str

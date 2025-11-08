@@ -1,41 +1,23 @@
-import { useState, useRef } from "react";
+import { useState } from "react";
 
-export default function CaretakerView({ onUpload, mediaList }) {
-  const [marker, setMarker] = useState(null);
+export default function CaretakerView({ mediaList, onUpload }) {
   const [file, setFile] = useState(null);
+  const [caption, setCaption] = useState("");
   const [uploading, setUploading] = useState(false);
-  const containerRef = useRef(null);
-  const threshold = 0.05; // Distance threshold for duplicates (5% of container)
-
-  const handleContainerClick = (e) => {
-    const rect = containerRef.current.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width;
-    const y = (e.clientY - rect.top) / rect.height;
-
-    // Check for existing flower close to this point
-    const duplicate = mediaList.some(
-      (item) => Math.hypot(item.x - x, item.y - y) < threshold
-    );
-    if (duplicate) {
-      alert("There is already a flower close to this position. Please choose another spot.");
-      return;
-    }
-    setMarker({ x, y });
-    setFile(null);
-  };
+  const [selectedMediaId, setSelectedMediaId] = useState(null);
 
   const handleFileChange = (e) => {
     if (e.target.files.length > 0) setFile(e.target.files[0]);
   };
 
   const handleUpload = async () => {
-    if (!file || !marker) return alert("Place marker and select a file first.");
+    if (!file) return alert("Please select a file before uploading.");
+    if (!caption.trim()) return alert("Please enter a caption.");
     setUploading(true);
 
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("x", marker.x);
-    formData.append("y", marker.y);
+    formData.append("caption", caption);
 
     try {
       const res = await fetch("http://localhost:8000/upload_media", {
@@ -44,9 +26,9 @@ export default function CaretakerView({ onUpload, mediaList }) {
       });
       if (!res.ok) throw new Error("Upload failed");
       const data = await res.json();
-      onUpload(data);
-      setMarker(null);
+      onUpload(data); // Notify parent of new media
       setFile(null);
+      setCaption("");
       alert("Upload successful!");
     } catch (err) {
       alert("Upload error: " + err.message);
@@ -56,68 +38,61 @@ export default function CaretakerView({ onUpload, mediaList }) {
 
   return (
     <div>
-      <h2>Caretaker View - Place Marker and Upload Media</h2>
-      <div
-        ref={containerRef}
-        onClick={handleContainerClick}
-        style={{
-          width: "100%",
-          height: 400,
-          border: "2px solid black",
-          position: "relative",
-          marginBottom: 20,
-          userSelect: "none",
-          cursor: "crosshair",
-        }}
-      >
-        {/* Render existing flower markers */}
-        {mediaList.map((item) => (
-          <div
-            key={item.id}
-            style={{
-              position: "absolute",
-              top: `${item.y * 100}%`,
-              left: `${item.x * 100}%`,
-              width: 24,
-              height: 24,
-              backgroundColor: "purple",
-              borderRadius: "50%",
-              transform: "translate(-50%, -50%)",
-              pointerEvents: "none",
-              opacity: 0.7,
-            }}
-            title={item.filename}
-          />
-        ))}
-
-        {/* New marker */}
-        {marker && (
-          <div
-            style={{
-              position: "absolute",
-              top: `${marker.y * 100}%`,
-              left: `${marker.x * 100}%`,
-              width: 24,
-              height: 24,
-              backgroundColor: "red",
-              borderRadius: "50%",
-              transform: "translate(-50%, -50%)",
-              pointerEvents: "none",
-              opacity: 1,
-            }}
-          />
-        )}
+      <h2>Caretaker Upload & Memories</h2>
+      <div style={{ marginBottom: 16 }}>
+        <input
+          type="text"
+          placeholder="Enter caption"
+          value={caption}
+          onChange={(e) => setCaption(e.target.value)}
+          style={{ marginBottom: 8, width: "100%", padding: 8 }}
+        />
+        <input type="file" accept="image/*,video/*" onChange={handleFileChange} />
+        <button onClick={handleUpload} disabled={uploading || !file}>
+          {uploading ? "Uploading…" : "Upload"}
+        </button>
       </div>
 
-      {marker && (
-        <div>
-          <input type="file" accept="image/*,video/*" onChange={handleFileChange} />
-          <button onClick={handleUpload} disabled={uploading || !file}>
-            {uploading ? "Uploading…" : "Upload Media"}
-          </button>
-        </div>
-      )}
-      {!marker && <p>Click inside the box above to place a flower marker.</p>}
+      <h3>Uploaded Memories</h3>
+      <div style={{ display: "flex", overflowX: "auto", paddingBottom: 10 }}>
+        {mediaList.length === 0 && <p>No memories uploaded yet.</p>}
+        {mediaList.map((media) => (
+          <div
+            key={media.id}
+            style={{
+              marginRight: 10,
+              cursor: "pointer",
+              border: media.id === selectedMediaId ? "3px solid #007bff" : "2px solid #ccc",
+              borderRadius: 6,
+              boxShadow: media.id === selectedMediaId ? "0 0 8px #007bff" : "none",
+              padding: 4,
+              maxWidth: 110,
+              userSelect: "none",
+            }}
+            onClick={() => setSelectedMediaId(media.id)}
+            title={media.caption || media.filename}
+          >
+            <img
+              src={media.url}
+              alt={media.filename}
+              style={{ width: 100, height: 100, objectFit: "cover", borderRadius: 4 }}
+            />
+            <div
+              style={{
+                whiteSpace: "normal",
+                wordWrap: "break-word",
+                fontSize: 12,
+                marginTop: 4,
+                height: 36,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {media.caption || "No caption"}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

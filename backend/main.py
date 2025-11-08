@@ -5,6 +5,8 @@ import firebase_admin
 from firebase_admin import credentials, firestore, storage
 import traceback
 from fastapi.responses import JSONResponse
+from random import sample
+from typing import List
 
 app = FastAPI()
 
@@ -15,6 +17,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Initialize Firebase Admin SDK
 cred = credentials.Certificate("healthhacks2025-71347-firebase-adminsdk-fbsvc-f2fcdb36d1.json")
 firebase_admin.initialize_app(cred, {
     "storageBucket": "healthhacks2025-71347.firebasestorage.app"
@@ -37,26 +40,24 @@ def login(data: LoginRequest):
 @app.post("/upload_media")
 async def upload_media(
     file: UploadFile = File(...),
-    x: float = Form(...),
-    y: float = Form(...)
+    caption: str = Form(...)
 ):
     try:
         contents = await file.read()
-
+        
         import uuid
         unique_filename = f"{uuid.uuid4()}_{file.filename}"
-
+        
         blob = bucket.blob(unique_filename)
         blob.upload_from_string(contents, content_type=file.content_type)
-
-        media_url = blob.generate_signed_url(version="v4", expiration=3600)
-
+        
+        media_url = blob.generate_signed_url(version="v4", expiration=3600)  # 1 hour signed URL
+        
         from datetime import datetime
         media_data = {
             "filename": unique_filename,
-            "url": media_url,   # Use the signed URL here
-            "x": x,
-            "y": y,
+            "url": media_url,
+            "caption": caption,
             "uploaded_at": datetime.utcnow().isoformat() + "Z",
         }
         db.collection("media").add(media_data)
@@ -78,8 +79,38 @@ def media_list():
             "id": doc.id,
             "filename": data.get("filename"),
             "url": data.get("url"),
-            "x": data.get("x"),
-            "y": data.get("y"),
+            "caption": data.get("caption", ""),
             "uploaded_at": data.get("uploaded_at"),
         })
     return media_items
+
+# In-memory store of shown memory IDs - resets on backend restart
+shown_memory_ids = set()
+
+@app.get("/random_memories")
+def random_memories():
+    media_ref = db.collection("media")
+    docs = media_ref.stream()
+    all_memories = [(doc.id, doc.to_dict()) for doc in docs]
+
+    unseen = [(id, mem) for id, mem in all_memories if id not in shown_memory_ids]
+    if not unseen:
+        shown_memory_ids.clear()
+        unseen = all_memories
+    
+    count = min(len(unseen), 3)
+    selected = sample(unseen, count)
+
+    for id, _ in selected:
+        shown_memory_ids.add(id)
+
+    return [
+        {
+            "id": id,
+            "filename": mem.get("filename"),
+            "url": mem.get("url"),
+            "caption": mem.get("caption", ""),
+            "uploaded_at": mem.get("uploaded_at"),
+        }
+        for id, mem in selected
+    ]

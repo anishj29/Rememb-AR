@@ -522,3 +522,33 @@ Reasoning: [brief explanation focusing on semantic/contextual relationships, not
         print("Similarity update error:", e)
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to update weights: {str(e)}")
+
+@app.put("/reset_weights")
+def reset_weights():
+    """
+    Reset all weight fields to 1.0 for all documents in the media collection.
+    """
+    try:
+        media_ref = db.collection("media")
+        docs = list(media_ref.stream())
+        
+        if len(docs) == 0:
+            return {
+                "message": "No documents found in the media collection",
+                "updated_count": 0
+            }
+        
+        updated_count = 0
+        for doc in docs:
+            doc.reference.update({"weight": 1.0})
+            updated_count += 1
+        
+        return {
+            "message": f"Successfully reset weights to 1.0 for {updated_count} documents",
+            "updated_count": updated_count
+        }
+        
+    except Exception as e:
+        print("Reset weights error:", e)
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to reset weights: {str(e)}")

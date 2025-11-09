@@ -147,14 +147,15 @@ def random_memories(k: int = Query(default=1, ge=1, description="Number of rando
     This algorithm ensures that:
     1. Items with higher weights are proportionally more likely to be selected.
     2. 'k' distinct items are returned (sampling without replacement).
-    3. After selection, the weights of selected images are reduced to 0.1, making them
-       unlikely to be selected again in subsequent calls.
-    4. It is stateless and robust for a server.
+    3. Items with weight <= 0 are excluded from selection.
+    4. After selection, the weights of selected images are set to 0, ensuring they
+       won't be selected again in subsequent calls.
+    5. It is stateless and robust for a server.
        
     Algorithm (A-ES by Efraimidis and Spirakis):
-    - For each item 'i' with weight 'w_i', calculate a key = random()^(1/w_i).
+    - For each item 'i' with weight 'w_i' > 0, calculate a key = random()^(1/w_i).
     - Select the 'k' items with the largest keys.
-    - Update selected items' weights to 0.1 in Firestore to prevent immediate re-selection.
+    - Update selected items' weights to 0 in Firestore to prevent re-selection.
     """
     try:
         media_ref = db.collection("media")
@@ -167,8 +168,11 @@ def random_memories(k: int = Query(default=1, ge=1, description="Number of rando
             if not mem:
                 continue
 
-            # Ensure weight is positive (minimum 0.1)
-            weight = max(mem.get("weight", 1.0), 0.1)
+            # Get the actual weight - skip items with weight <= 0
+            weight = mem.get("weight", 1.0)
+            if weight <= 0:
+                continue  # Skip items with weight 0 or negative
+            
             rand_val = random()  # Generates a float in [0.0, 1.0)
             
             # Handle the edge case of rand_val = 0.0 to avoid math domain error
@@ -203,12 +207,12 @@ def random_memories(k: int = Query(default=1, ge=1, description="Number of rando
         selected_memories = [item for key, item, doc_ref in selected_data]
         selected_doc_refs = [doc_ref for key, item, doc_ref in selected_data]
         
-        # Update weights of selected images to a very low value (0.1) so they're unlikely to be selected again
-        # This ensures images that have been shown recently won't be shown again soon
+        # Update weights of selected images to 0 so they won't be selected again
+        # This ensures images that have been shown won't be shown again
         try:
             for doc_ref in selected_doc_refs:
                 doc_ref.update({"weight": 0})
-            print(f"Updated weights to 0.1 for {len(selected_doc_refs)} selected memories")
+            print(f"Updated weights to 0 for {len(selected_doc_refs)} selected memories")
         except Exception as update_error:
             # Log error but don't fail the request
             print(f"Warning: Failed to update weights for selected memories: {update_error}")

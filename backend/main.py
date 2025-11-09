@@ -9,6 +9,7 @@ from random import random
 from typing import List
 import os
 import re
+import json
 import requests
 import google.generativeai as genai
 from dotenv import load_dotenv
@@ -149,15 +150,14 @@ def random_memories(k: int = Query(default=1, ge=1, description="Number of rando
     This algorithm ensures that:
     1. Items with higher weights are proportionally more likely to be selected.
     2. 'k' distinct items are returned (sampling without replacement).
-    3. Items with weight <= 0 are excluded from selection.
-    4. After selection, the weights of selected images are set to 0, ensuring they
-       won't be selected again in subsequent calls.
-    5. It is stateless and robust for a server.
+    3. After selection, the weights of selected images are reduced to 0.1, making them
+       unlikely to be selected again in subsequent calls.
+    4. It is stateless and robust for a server.
        
     Algorithm (A-ES by Efraimidis and Spirakis):
-    - For each item 'i' with weight 'w_i' > 0, calculate a key = random()^(1/w_i).
+    - For each item 'i' with weight 'w_i', calculate a key = random()^(1/w_i).
     - Select the 'k' items with the largest keys.
-    - Update selected items' weights to 0 in Firestore to prevent re-selection.
+    - Update selected items' weights to 0.1 in Firestore to prevent immediate re-selection.
     """
     try:
         media_ref = db.collection("media")
@@ -170,11 +170,8 @@ def random_memories(k: int = Query(default=1, ge=1, description="Number of rando
             if not mem:
                 continue
 
-            # Get the actual weight - skip items with weight <= 0
-            weight = mem.get("weight", 1.0)
-            if weight <= 0:
-                continue  # Skip items with weight 0 or negative
-            
+            # Ensure weight is positive (minimum 0.1)
+            weight = max(mem.get("weight", 1.0), 0.1)
             rand_val = random()  # Generates a float in [0.0, 1.0)
             
             # Handle the edge case of rand_val = 0.0 to avoid math domain error
@@ -209,12 +206,12 @@ def random_memories(k: int = Query(default=1, ge=1, description="Number of rando
         selected_memories = [item for key, item, doc_ref in selected_data]
         selected_doc_refs = [doc_ref for key, item, doc_ref in selected_data]
         
-        # Update weights of selected images to 0 so they won't be selected again
-        # This ensures images that have been shown won't be shown again
+        # Update weights of selected images to a very low value (0.1) so they're unlikely to be selected again
+        # This ensures images that have been shown recently won't be shown again soon
         try:
             for doc_ref in selected_doc_refs:
                 doc_ref.update({"weight": 0})
-            print(f"Updated weights to 0 for {len(selected_doc_refs)} selected memories")
+            print(f"Updated weights to 0.1 for {len(selected_doc_refs)} selected memories")
         except Exception as update_error:
             # Log error but don't fail the request
             print(f"Warning: Failed to update weights for selected memories: {update_error}")
@@ -616,3 +613,247 @@ def reset_weights():
         print("Reset weights error:", e)
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to reset weights: {str(e)}")
+
+@app.get("/generate_survey")
+async def generate_survey(
+    limit: int = Query(default=10, ge=1, le=50, description="Maximum number of memories to use for survey generation"),
+    min_memories: int = Query(default=3, ge=1, description="Minimum number of memories required to generate a survey")
+):
+    """
+    Generate a memory recall survey based on uploaded photos with combined descriptions.
+    
+    The survey tests general knowledge and recall about the patient's life, NOT photo recognition.
+    The patient will NOT see the photos during the survey, so questions focus on general facts
+    like "what breed is your dog?" or "what brand is your car?" rather than photo-specific details.
+    
+    Requirements:
+    - At least 'min_memories' images must exist in the database
+    - All selected images must have combined descriptions (waits for them to be generated)
+    
+    Returns a survey with only MCQ questions about (keeping them to ONLY easy difficulty, no medium or hard):
+    - General knowledge about their possessions (e.g., "what breed is your dog?")
+    - People in their life (e.g., "what is your sister's name?")
+    - Places they've been (e.g., "where did you go on vacation?")
+    - Important events and experiences
+    
+    Questions do NOT reference photos or images and test recall, not visual recognition.
+    """
+    if not GEMINI_KEY:
+        raise HTTPException(status_code=500, detail="GEMINI_KEY not configured")
+    
+    try:
+        # Fetch all memories from Firestore
+        media_ref = db.collection("media")
+        docs = list(media_ref.stream())
+        
+        if len(docs) == 0:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"No images found in the database. Please upload at least {min_memories} images first."
+            )
+        
+        # Filter to only memories with combined descriptions
+        memories_with_descriptions = []
+        memories_without_descriptions = []
+        
+        for doc in docs:
+            mem = doc.to_dict()
+            if not mem:
+                continue
+            
+            # Check if combined_description exists
+            combined_desc = mem.get("combined_description", "")
+            if combined_desc and combined_desc.strip():
+                memories_with_descriptions.append({
+                    "id": doc.id,
+                    "combined_description": combined_desc,
+                    "caption": mem.get("caption", ""),
+                    "url": mem.get("url", ""),
+                    "filename": mem.get("filename", "")
+                })
+            else:
+                memories_without_descriptions.append({
+                    "id": doc.id,
+                    "caption": mem.get("caption", "")
+                })
+        
+        # Check if we have enough memories with descriptions
+        if len(memories_with_descriptions) < min_memories:
+            missing_count = min_memories - len(memories_with_descriptions)
+            return JSONResponse(
+                status_code=202,  # Accepted but not ready
+                content={
+                    "status": "waiting",
+                    "message": f"Not enough images with combined descriptions yet. Need {missing_count} more.",
+                    "images_with_descriptions": len(memories_with_descriptions),
+                    "images_without_descriptions": len(memories_without_descriptions),
+                    "total_images": len(docs),
+                    "required": min_memories,
+                    "hint": "Combined descriptions are generated automatically when images are uploaded. Please wait a moment and try again."
+                }
+            )
+        
+        # Limit the number of memories used for survey generation
+        memories_to_use = memories_with_descriptions[:limit]
+        
+        if len(memories_to_use) == 0:
+            raise HTTPException(
+                status_code=404,
+                detail="No memories with combined descriptions available for survey generation"
+            )
+        
+        # Prepare memory summary for Gemini
+        memory_summary = "\n".join([
+            f"Memory {i+1} (ID: {mem['id']}): {mem['combined_description']}" 
+            for i, mem in enumerate(memories_to_use)
+        ])
+        
+        # Get example memory ID for prompt
+        example_memory_id = memories_to_use[0]['id'] if memories_to_use else ""
+        
+        # Create prompt for survey generation
+        prompt = f"""You are creating a memory recall survey for a patient with memory issues.
+The patient has NOT seen their photos recently and will NOT see the photos during the survey.
+The survey tests their general knowledge and recall about their life, possessions, relationships, and experiences.
+
+Based on these memories from their collection (these are descriptions of their photos):
+{memory_summary}
+
+Generate exactly 5 questions that:
+1. Tests general knowledge and recall about their life (NOT specific photo details)
+2. Uses ONLY multiple choice (MCQ) question type - NO short answer questions
+3. Uses ONLY "easy" difficulty for all questions
+4. Focuses on distinctive and memorable aspects of their life
+5. Can be completed in 5-10 minutes
+
+CRITICAL RULES:
+- Questions should be about GENERAL KNOWLEDGE, not photo-specific details
+- DO NOT ask "what is in this photo" or "what is this dog doing in this photo"
+- DO ask questions like "what breed is your dog?", "what brand is your car?", "what is your sister's name?"
+- DO NOT reference photos, images, or photo IDs in the questions themselves
+- Questions should test recall of facts about their life, not visual recognition
+- Extract general facts from the memory descriptions and ask about those facts
+
+Examples of GOOD questions:
+- "What breed is your dog?" (if memories mention a dog breed)
+- "What brand is your car?" (if memories mention a car brand)
+- "What is your sister's name?" (if memories mention a sister)
+- "Where did you go on vacation?" (if memories mention a vacation location)
+- "What is your pet's name?" (if memories mention a pet)
+
+Examples of BAD questions (DO NOT USE):
+- "What is in the photo with [description]?"
+- "Who is in this image?"
+- "What is the dog doing in the photo?"
+- "What place is shown in the photo?"
+
+For each question:
+- ALL questions must be MCQ (multiple choice) with 4 options and one correct answer
+- NO short answer questions allowed
+- ALL questions must have difficulty set to "easy" only
+- Questions should test general knowledge/recall, not photo recognition
+- Include related_memory_ids to track which memories the question is based on
+
+Return ONLY a JSON array with exactly 5 questions using this exact structure:
+[
+  {{
+    "question": "What breed is your dog?",
+    "type": "multiple_choice",
+    "options": ["Golden Retriever", "Labrador", "German Shepherd", "Beagle"],
+    "correct_answer": "Golden Retriever",
+    "related_memory_ids": ["{example_memory_id}"],
+    "difficulty": "easy",
+    "category": "objects"
+  }},
+  {{
+    "question": "What is your sister's name?",
+    "type": "multiple_choice",
+    "options": ["Susan", "Sarah", "Emily", "Jessica"],
+    "correct_answer": "Susan",
+    "related_memory_ids": ["{example_memory_id}"],
+    "difficulty": "easy",
+    "category": "people"
+  }}
+]
+
+Important:
+- Generate EXACTLY 5 questions (no more, no less)
+- ALL questions must be type "multiple_choice" (NO short_answer questions)
+- ALL questions must have difficulty "easy" (NO medium or hard)
+- Use actual memory IDs from the provided memories in related_memory_ids
+- For "category", use: "people", "places", "objects", or "events"
+- For "difficulty", ALWAYS use "easy" (never "medium" or "hard")
+- Ensure correct_answer matches one of the options for each MCQ question
+- DO NOT reference photos, images, or photo IDs in the question text
+- Generate questions dynamically based on the memory descriptions
+- Return ONLY valid JSON, no markdown, no code blocks, no explanations"""
+
+        # Generate survey using Gemini
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        print(f"Generating survey with Gemini using {len(memories_to_use)} memories...")
+        response = model.generate_content(prompt)
+        survey_text = response.text.strip()
+        
+        # Remove markdown code blocks if present
+        survey_text = survey_text.replace("```json", "").replace("```", "").strip()
+        
+        # Parse the JSON response
+        try:
+            survey_json = json.loads(survey_text)
+            
+            # Validate survey structure
+            if not isinstance(survey_json, list):
+                raise ValueError("Survey must be a JSON array")
+            
+            # Validate question count
+            if len(survey_json) != 5:
+                raise ValueError(f"Survey must have exactly 5 questions, but got {len(survey_json)}")
+            
+            # Validate each question
+            for i, question in enumerate(survey_json):
+                if not isinstance(question, dict):
+                    raise ValueError(f"Question {i+1} must be a JSON object")
+                if "question" not in question or "type" not in question:
+                    raise ValueError(f"Question {i+1} missing required fields")
+                
+                # Ensure all questions are MCQ
+                if question["type"] != "multiple_choice":
+                    raise ValueError(f"Question {i+1} must be type 'multiple_choice', got '{question.get('type')}'")
+                
+                # Validate MCQ structure
+                if "options" not in question or "correct_answer" not in question:
+                    raise ValueError(f"MCQ question {i+1} missing options or correct_answer")
+                
+                # Ensure difficulty is "easy"
+                if question.get("difficulty") != "easy":
+                    raise ValueError(f"Question {i+1} must have difficulty 'easy', got '{question.get('difficulty')}'")
+            
+        except json.JSONDecodeError as e:
+            print(f"Failed to parse survey JSON: {e}")
+            print(f"Raw response: {survey_text}")
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Failed to parse survey JSON. The AI may have returned invalid JSON. Error: {str(e)}"
+            )
+        except ValueError as e:
+            print(f"Survey validation error: {e}")
+            print(f"Raw response: {survey_text}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Survey validation failed: {str(e)}"
+            )
+        
+        return {
+            "survey": survey_json,
+            "total_questions": len(survey_json),
+            "memories_used": len(memories_to_use),
+            "total_memories_available": len(memories_with_descriptions),
+            "memories_without_descriptions": len(memories_without_descriptions)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print("Survey generation error:", e)
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to generate survey: {str(e)}")

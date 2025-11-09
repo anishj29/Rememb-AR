@@ -254,7 +254,7 @@ async def get_llm_image_analysis(image_url: str, filename: str = None) -> str:
                 print(f"URL expired (status {e.response.status_code}), generating new signed URL for {filename}")
                 try:
                     blob = bucket.blob(filename)
-                    new_url = blob.generate_signed_url(version="v4", expiration=3600)
+                    new_url = blob.generate_signed_url(version="v4", expiration=172800)
                     print(f"Generated new signed URL, retrying download...")
                     response = requests.get(new_url, timeout=30)
                     response.raise_for_status()

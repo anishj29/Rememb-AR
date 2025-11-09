@@ -77,7 +77,42 @@ async def upload_media(
             "weight": 1.0,
             "uploaded_at": datetime.utcnow().isoformat() + "Z",
         }
-        db.collection("media").add(media_data)
+        
+        # Add document to Firestore and get the document reference
+        doc_ref = db.collection("media").add(media_data)[1]  # Returns (timestamp, DocumentReference)
+        doc_id = doc_ref.id
+        
+        # Automatically generate LLM image analysis and combined description
+        if GEMINI_KEY:
+            print(f"Starting LLM image analysis for uploaded image: {doc_id}")
+            try:
+                # Get LLM image analysis
+                llm_analysis = await get_llm_image_analysis(media_url, unique_filename)
+                
+                # Create combined description (prioritizing user caption)
+                if llm_analysis and llm_analysis.strip():
+                    combined_description = await combine_descriptions_with_llm(caption, llm_analysis)
+                    print(f"Created combined description for {doc_id}")
+                else:
+                    # If LLM analysis failed, just use the caption
+                    combined_description = caption
+                    print(f"Using caption only for {doc_id} (LLM analysis unavailable)")
+                
+                # Update the document with the combined description
+                doc_ref.update({"combined_description": combined_description})
+                media_data["combined_description"] = combined_description
+                
+            except Exception as analysis_error:
+                # If analysis fails, continue without it - don't fail the upload
+                print(f"Warning: LLM image analysis failed for {doc_id}: {analysis_error}")
+                print("Upload will continue without combined description")
+                traceback.print_exc()
+        else:
+            print(f"GEMINI_KEY not configured, skipping LLM image analysis for {doc_id}")
+            # Still store the caption as combined_description for consistency
+            doc_ref.update({"combined_description": caption})
+            media_data["combined_description"] = caption
+        
         return media_data
 
     except Exception as e:

@@ -1,10 +1,3 @@
-//
-//  HelloWorldApp.swift
-//  HelloWorld
-//
-//  Created by Sankeerth Bharadwaj on 9/25/25.
-//
-
 import SwiftUI
 
 @main

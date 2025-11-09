@@ -31,48 +31,58 @@ struct LoginView: View {
                         Button("Go to AR Experience") {
                             showARView.toggle()
                         }
-                        .buttonStyle(.borderedProminent)
                         .padding()
+                        .background(Color(red: 1.0, green: 0.4, blue: 0.6))
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
                     }
                     MediaUploadView()
                 }
             }
         } else {
-            VStack(spacing: 16) {
-                Text("Login to Continue")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                    .padding(.bottom, 8)
+            ZStack {
+                Color(red: 0.19, green: 0.29, blue: 0.21)
+                    .ignoresSafeArea()
+                VStack(spacing: 16) {
+                    Text("Login to Continue")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                        .padding(.bottom, 8)
+                        .foregroundColor(.white)
 
-                TextField("Username", text: $username)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .autocapitalization(.none)
+                    TextField("Username", text: $username)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .autocapitalization(.none)
+                        .colorScheme(.dark)
 
-                SecureField("Password", text: $password)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    SecureField("Password", text: $password)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .colorScheme(.dark)
 
-                Button("Login") {
-                    APIService.shared.login(username: username, password: password) { success, _ in
-                        DispatchQueue.main.async {
-                            if success {
-                                loggedIn = true
-                            } else {
-                                errorMessage = "Invalid username or password"
-                                showLoginError = true
+                    Button("Login") {
+                        APIService.shared.login(username: username, password: password) { success, _ in
+                            DispatchQueue.main.async {
+                                if success {
+                                    loggedIn = true
+                                } else {
+                                    errorMessage = "Invalid username or password"
+                                    showLoginError = true
+                                }
                             }
                         }
                     }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .padding(.top, 8)
                 }
-                .buttonStyle(.borderedProminent)
-                .padding(.top, 8)
-            }
-            .padding()
-            .alert(isPresented: $showLoginError) {
-                Alert(
-                    title: Text("Login Failed"),
-                    message: Text(errorMessage),
-                    dismissButton: .default(Text("OK"))
-                )
+                .padding()
+                .alert(isPresented: $showLoginError) {
+                    Alert(
+                        title: Text("Login Failed"),
+                        message: Text(errorMessage),
+                        dismissButton: .default(Text("OK"))
+                    )
+                }
             }
         }
     }
@@ -88,156 +98,225 @@ struct MediaUploadView: View {
     @State private var showQueryBox = false
     @State private var customQuery = ""
     @State private var queryResponse = ""
-    
+    @State private var selectedTab = 0
+    @State private var cacheRefreshTrigger = false
+
     // Computed property for cached images
     var cachedImages: [UIImage] {
         let cacheFolder = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!.appendingPathComponent("FlowerImageCache")
         guard let files = try? FileManager.default.contentsOfDirectory(at: cacheFolder, includingPropertiesForKeys: nil) else { return [] }
         return files.compactMap { UIImage(contentsOfFile: $0.path) }
     }
-    
+
     var body: some View {
-        VStack(spacing: 20) {
-            Text("Upload a Photo or Video")
-                .font(.title2)
-                .bold()
-
-            // MARK: Media Picker
-            PhotosPicker(selection: $selectedItem, matching: .any(of: [.images, .videos])) {
-                Label("Choose File", systemImage: "photo.on.rectangle")
-                    .font(.headline)
-                    .padding()
-                    .frame(maxWidth: .infinity)
-                    .background(Color.blue.opacity(0.2))
-                    .cornerRadius(10)
-            }
-            .onChange(of: selectedItem) { newItem in
-                guard let newItem else { return }
-                Task {
-                    if let data = try? await newItem.loadTransferable(type: Data.self) {
-                        selectedMediaData = data
-                        selectedMediaType = newItem.supportedContentTypes.contains(.movie) ? "video" : "image"
-                        uploadStatus = "✅ Selected \(selectedMediaType)"
-                    }
+        ZStack(alignment: .top) {
+            Color(red: 0.19, green: 0.29, blue: 0.21)
+                .ignoresSafeArea()
+            VStack(spacing: 0) {
+                // AR Experience button at the top
+                HStack {
+                    Spacer()
+                    // The button to AR Experience is handled in LoginView
                 }
-            }
+                // TabView for Upload, Query, Cache
+                TabView(selection: $selectedTab) {
+                    // Upload Tab
+                    ScrollView {
+                        VStack(spacing: 20) {
+                            Text("Upload a Photo or Video")
+                                .font(.title2)
+                                .bold()
 
-            // MARK: Preview
-            if let data = selectedMediaData {
-                if selectedMediaType == "image", let image = UIImage(data: data) {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(height: 200)
-                        .cornerRadius(12)
-                } else if selectedMediaType == "video" {
-                    Text("🎬 Video selected (preview not shown)")
-                        .font(.subheadline)
-                        .foregroundColor(.gray)
-                }
-            }
-
-            // Caption TextField
-            TextField("Enter caption", text: $caption)
-                .textFieldStyle(RoundedBorderTextFieldStyle())
-                .padding(.horizontal)
-
-            // Show cached images previews
-            if !cachedImages.isEmpty {
-                Text("Previously Cached Images")
-                    .font(.headline)
-                    .padding(.top)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(Array(cachedImages.enumerated()), id: \.offset) { _, image in
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFill()
-                                .frame(width: 100, height: 100)
-                                .clipped()
-                                .cornerRadius(8)
-                                .shadow(radius: 4)
-                        }
-                    }
-                    .padding(.horizontal)
-                }
-            }
-            
-            Divider()
-            Text("Custom Query to Backend")
-                .font(.headline)
-
-            Button("Open Query Box") {
-                showQueryBox = true
-            }
-            .buttonStyle(.bordered)
-
-            if showQueryBox {
-                VStack(spacing: 10) {
-                    TextField("Enter your custom query", text: $customQuery)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                        .padding(.horizontal)
-
-                    Button("Send Query") {
-                        guard !customQuery.isEmpty else {
-                            queryResponse = "⚠️ Please enter a query first."
-                            return
-                        }
-                        APIService.shared.sendCustomQuery(customQuery) { response in
-                            DispatchQueue.main.async {
-                                queryResponse = response
+                            // MARK: Media Picker
+                            PhotosPicker(selection: $selectedItem, matching: .any(of: [.images, .videos])) {
+                                Label("Choose File", systemImage: "photo.on.rectangle")
+                                    .font(.headline)
+                                    .padding()
+                                    .frame(maxWidth: .infinity)
+                                    .background(Color.blue.opacity(0.2))
+                                    .cornerRadius(10)
                             }
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                }
-            }
+                            .onChange(of: selectedItem) { newItem in
+                                guard let newItem else { return }
+                                Task {
+                                    if let data = try? await newItem.loadTransferable(type: Data.self) {
+                                        selectedMediaData = data
+                                        selectedMediaType = newItem.supportedContentTypes.contains(.movie) ? "video" : "image"
+                                        uploadStatus = "✅ Selected \(selectedMediaType)"
+                                    }
+                                }
+                            }
 
-            if !queryResponse.isEmpty {
-                Text(queryResponse)
-                    .foregroundColor(.gray)
-                    .font(.subheadline)
-                    .padding(.top, 4)
-            }
-            Divider()
+                            // MARK: Preview
+                            if let data = selectedMediaData {
+                                if selectedMediaType == "image", let image = UIImage(data: data) {
+                                    Image(uiImage: image)
+                                        .resizable()
+                                        .scaledToFit()
+                                        .frame(height: 200)
+                                        .cornerRadius(12)
+                                } else if selectedMediaType == "video" {
+                                    Text("🎬 Video selected (preview not shown)")
+                                        .font(.subheadline)
+                                        .foregroundColor(.gray)
+                                }
+                            }
 
-            // MARK: Upload Button
-            Button(action: {
-                guard let mediaData = selectedMediaData else {
-                    uploadStatus = "⚠️ No media selected"
-                    return
-                }
-                isUploading = true
-                APIService.shared.uploadMedia(data: mediaData, type: selectedMediaType, caption: caption) { success in
-                    DispatchQueue.main.async {
-                        isUploading = false
-                        uploadStatus = success ? "✅ Upload successful!" : "❌ Upload failed"
-                        // Cache the uploaded image if it's an image type
-                        if success, selectedMediaType == "image", let data = selectedMediaData, let image = UIImage(data: data) {
-                            let id = UUID().uuidString
-                            ImageCache.shared.saveImage(image, for: id)
+                            // Caption TextField
+                            TextField("Enter caption", text: $caption)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .padding(.horizontal)
+
+                            // MARK: Upload Button
+                            Button(action: {
+                                guard let mediaData = selectedMediaData else {
+                                    uploadStatus = "⚠️ No media selected"
+                                    return
+                                }
+                                isUploading = true
+                                APIService.shared.uploadMedia(data: mediaData, type: selectedMediaType, caption: caption) { success in
+                                    DispatchQueue.main.async {
+                                        isUploading = false
+                                        uploadStatus = success ? "✅ Upload successful!" : "❌ Upload failed"
+                                        // Cache the uploaded image if it's an image type
+                                        if success, selectedMediaType == "image", let data = selectedMediaData, let image = UIImage(data: data) {
+                                            let id = UUID().uuidString
+                                            ImageCache.shared.saveImage(image, for: id)
+                                            cacheRefreshTrigger.toggle()
+                                        }
+                                        caption = ""
+                                        selectedMediaData = nil
+                                    }
+                                }
+                            }) {
+                                Text("Upload to Server")
+                                    .foregroundColor(.white)
+                                    .padding()
+                                    .background(Color(red: 0.5, green: 0.0, blue: 0.0))
+                                    .cornerRadius(8)
+                            }
+                            .disabled(isUploading)
+
+                            if isUploading {
+                                ProgressView("Uploading...")
+                            }
+
+                            Text(uploadStatus)
+                                .foregroundColor(.gray)
+                                .font(.subheadline)
+
+                            Spacer()
                         }
-                        caption = ""
-                        selectedMediaData = nil
+                        .padding()
+                    }
+                    .tag(0)
+                    .tabItem {
+                        Label("Upload", systemImage: "square.and.arrow.up")
+                    }
+
+                    // Query Tab
+                    ScrollView {
+                        VStack(spacing: 20) {
+                            Text("Custom Query to Backend")
+                                .font(.title2)
+                                .bold()
+
+                            Button("Open Query Box") {
+                                showQueryBox = true
+                            }
+                            .buttonStyle(.bordered)
+
+                            if showQueryBox {
+                                VStack(spacing: 10) {
+                                    TextField("Enter your custom query", text: $customQuery)
+                                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                                        .padding(.horizontal)
+
+                                    Button("Send Query") {
+                                        guard !customQuery.isEmpty else {
+                                            queryResponse = "⚠️ Please enter a query first."
+                                            return
+                                        }
+                                        APIService.shared.sendCustomQuery(customQuery) { response in
+                                            DispatchQueue.main.async {
+                                                queryResponse = response
+                                            }
+                                        }
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                }
+                            }
+
+                            if !queryResponse.isEmpty {
+                                Text(queryResponse)
+                                    .foregroundColor(.gray)
+                                    .font(.subheadline)
+                                    .padding(.top, 4)
+                            }
+
+                            Spacer()
+                        }
+                        .padding()
+                    }
+                    .tag(1)
+                    .tabItem {
+                        Label("Query", systemImage: "magnifyingglass")
+                    }
+
+                    // Cache Tab
+                    ScrollView {
+                        VStack(spacing: 20) {
+                            Group {
+                                let images = cachedImages
+                                if !images.isEmpty {
+                                    Text("Previously Cached Images")
+                                        .font(.title2)
+                                        .bold()
+                                    ScrollView(.horizontal, showsIndicators: false) {
+                                        HStack(spacing: 10) {
+                                            ForEach(Array(images.enumerated()), id: \.offset) { _, image in
+                                                Image(uiImage: image)
+                                                    .resizable()
+                                                    .scaledToFill()
+                                                    .frame(width: 100, height: 100)
+                                                    .clipped()
+                                                    .cornerRadius(8)
+                                                    .shadow(radius: 4)
+                                            }
+                                        }
+                                        .padding(.horizontal)
+                                    }
+                                    Button("Clear Cached Images") {
+                                        let cacheFolder = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!.appendingPathComponent("FlowerImageCache")
+                                        if let files = try? FileManager.default.contentsOfDirectory(at: cacheFolder, includingPropertiesForKeys: nil) {
+                                            for file in files {
+                                                try? FileManager.default.removeItem(at: file)
+                                            }
+                                        }
+                                        cacheRefreshTrigger.toggle()
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .foregroundColor(.red)
+                                    .padding(.top, 8)
+                                } else {
+                                    Text("No cached images found.")
+                                        .foregroundColor(.gray)
+                                        .padding(.top, 40)
+                                }
+                            }
+                            Spacer()
+                        }
+                        .padding()
+                        .id(cacheRefreshTrigger) // trigger reload when cache is cleared
+                    }
+                    .tag(2)
+                    .tabItem {
+                        Label("Cache", systemImage: "photo.stack")
                     }
                 }
-            }) {
-                Text("Upload to Server")
+                .accentColor(.green)
             }
-            .disabled(isUploading)
-            .buttonStyle(.borderedProminent)
-            
-            if isUploading {
-                ProgressView("Uploading...")
-            }
-            
-            Text(uploadStatus)
-                .foregroundColor(.gray)
-                .font(.subheadline)
-            
-            Spacer()
         }
-        .padding()
     }
 }
 

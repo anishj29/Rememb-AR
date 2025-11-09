@@ -166,7 +166,7 @@ class APIService {
         let fieldName = "file"
         let mimeType = "image/jpeg"
         let imageData = image.jpegData(compressionQuality: 0.8)!
-
+        
         body.append("--\(boundary)\r\n")
         body.append("Content-Disposition: form-data; name=\"\(fieldName)\"; filename=\"\(filename)\"\r\n")
         body.append("Content-Type: \(mimeType)\r\n\r\n")
@@ -177,8 +177,74 @@ class APIService {
         body.append(caption.data(using: .utf8)!)
         body.append("\r\n")
         body.append("--\(boundary)--\r\n")
-
+        
         return body
+    }
+    func fetchSurvey(completion: @escaping (Survey?) -> Void) {
+        
+        guard let url = URL(string: "\(baseURL)/generate_survey") else {
+            completion(nil)
+            return
+        }
+
+        URLSession.shared.dataTask(with: url) { data, _, error in
+            if let error = error {
+                print("❌ Survey fetch error:", error.localizedDescription)
+                completion(nil)
+                return
+            }
+
+            guard let data = data else {
+                completion(nil)
+                return
+            }
+
+            do {
+                let survey = try JSONDecoder().decode(Survey.self, from: data)
+                completion(survey)
+            } catch {
+                print("❌ Failed to decode survey:", error)
+                completion(nil)
+            }
+        }.resume()
+    }
+
+    func sendSurveyResults(_ survey: Survey, responses: [Int: String], correctAnswers: [Int: String], completion: @escaping (String) -> Void) {
+        // Filter incorrect answers
+        let incorrectAnswers = responses.filter { questionID, userAnswer in
+            correctAnswers[questionID] != userAnswer
+        }
+
+        // Create JSON body
+        let queryData: [String: Any] = [
+            "query": "I'm forgetting \(incorrectAnswers)"
+        ]
+
+        guard let url = URL(string: "\(baseURL)/update_weights_by_similarity") else {
+            completion("❌ Invalid backend URL.")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: queryData, options: [])
+
+        // Perform request
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                completion("❌ Network error: \(error.localizedDescription)")
+                return
+            }
+
+            guard let data = data,
+                  let resultString = String(data: data, encoding: .utf8) else {
+                completion("⚠️ No response from server.")
+                return
+            }
+
+            completion("✅ Sent incorrect answers: \(resultString)")
+        }.resume()
     }
     
 }

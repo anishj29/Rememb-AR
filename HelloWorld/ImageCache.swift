@@ -45,4 +45,39 @@ class ImageCache {
     func isCached(_ id: String) -> Bool {
         return fileManager.fileExists(atPath: localURL(for: id).path)
     }
+    
+    func ensureMinimumCache(count threshold: Int = 2) {
+        let cachedFiles = (try? fileManager.contentsOfDirectory(at: cacheFolder, includingPropertiesForKeys: nil)) ?? []
+        if cachedFiles.count <= threshold {
+            print("🌿 Only \(cachedFiles.count) cached images left — fetching 5 new ones.")
+            preloadRandomImages(batchSize: 5)
+        }
+    }
+
+    func preloadRandomImages(batchSize: Int = 5) {
+        APIService.shared.fetchRandomMemories { items in
+            let cachedFiles = (try? self.fileManager.contentsOfDirectory(at: self.cacheFolder, includingPropertiesForKeys: nil)) ?? []
+            let cachedIDs = cachedFiles.map { $0.deletingPathExtension().lastPathComponent }
+
+            // Filter out already-cached images
+            let newItems = items.filter { !cachedIDs.contains($0.id) }
+            let toCache = Array(newItems.prefix(batchSize))
+
+            for item in toCache {
+                guard let url = URL(string: item.url) else { continue }
+                URLSession.shared.dataTask(with: url) { data, _, _ in
+                    if let data = data, let image = UIImage(data: data) {
+                        self.saveImage(image, for: item.id)
+                        print("✅ Cached image for:", item.caption)
+                    }
+                }.resume()
+            }
+        }
+    }
+    
+    func cachedCount() -> Int {
+        let files = (try? fileManager.contentsOfDirectory(at: cacheFolder, includingPropertiesForKeys: nil)) ?? []
+        return files.count
+    }
+    
 }

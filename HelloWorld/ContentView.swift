@@ -4,6 +4,115 @@ import ARKit
 import Combine
 import PhotosUI
 import AVKit
+// MARK: - Survey View
+struct SurveyView: View {
+    @State private var survey: Survey?
+    @State private var responses: [Int: String] = [:]
+    @State private var statusMessage = ""
+    @State private var isSubmitted = false
+    @State private var incorrectQuestions: Set<UUID> = []
+    @State private var correctQuestions: Set<UUID> = []
+
+    var body: some View {
+        ZStack {
+            Color(red: 0.19, green: 0.29, blue: 0.21).ignoresSafeArea()
+            ScrollView {
+                VStack(spacing: 20) {
+                    if let currentSurvey = survey {
+                        Text("Memory Recall Survey")
+                            .font(.title2)
+                            .bold()
+                            .foregroundColor(.white)
+                            .padding(.bottom, 8)
+                        ForEach(currentSurvey.survey) { question in
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(question.question)
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                if question.type == "text" {
+                                    TextField("Enter your answer", text: Binding(
+                                        get: { responses[question.id.hashValue] ?? "" },
+                                        set: { responses[question.id.hashValue] = $0 }
+                                    ))
+                                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                                    .disabled(isSubmitted)
+                                } else if question.type == "multiple_choice", let options = question.options {
+                                    ForEach(options, id: \.self) { option in
+                                        Button(option) {
+                                            if !isSubmitted {
+                                                responses[question.id.hashValue] = option
+                                            }
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .tint(
+                                            incorrectQuestions.contains(question.id)
+                                                ? .red
+                                                : (correctQuestions.contains(question.id)
+                                                   ? .green
+                                                   : (responses[question.id.hashValue] == option ? .blue : .gray))
+                                        )
+                                        .disabled(isSubmitted)
+                                    }
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 6)
+                        }
+                        Button("Submit Survey") {
+                            guard let currentSurvey = survey else { return }
+                            incorrectQuestions.removeAll()
+                            correctQuestions.removeAll()
+                            for question in currentSurvey.survey {
+                                if let userAnswer = responses[question.id.hashValue] {
+                                    if userAnswer == question.correct_answer {
+                                        correctQuestions.insert(question.id)
+                                    } else {
+                                        incorrectQuestions.insert(question.id)
+                                    }
+                                } else {
+                                    incorrectQuestions.insert(question.id)
+                                }
+                            }
+                            isSubmitted = true
+                            let correctAnswers: [Int: String] = [:]
+                            APIService.shared.sendSurveyResults(currentSurvey, responses: responses, correctAnswers: correctAnswers) { result in
+                                DispatchQueue.main.async {
+                                    statusMessage = result
+                                }
+                            }
+                        }
+                        .foregroundColor(.white)
+                        .padding()
+                        .frame(maxWidth: .infinity)
+                        .background(Color(red: 0.8, green: 0.4, blue: 0.4))
+                        .cornerRadius(10)
+                        .padding(.top, 16)
+                        .disabled(isSubmitted)
+                        .tint(isSubmitted ? .gray : Color(red: 0.8, green: 0.4, blue: 0.4))
+                    } else {
+                        ProgressView("Loading survey...")
+                            .onAppear {
+                                APIService.shared.fetchSurvey { survey in
+                                    DispatchQueue.main.async {
+                                        self.survey = survey
+                                    }
+                                }
+                            }
+                    }
+                    if !statusMessage.isEmpty {
+                        Text(statusMessage)
+                            .foregroundColor(.white)
+                            .padding(.top, 10)
+                    }
+                    Spacer()
+                }
+                .padding()
+            }
+        }
+    }
+}
+
 
 struct LoginView: View {
     @State private var username = ""
@@ -23,20 +132,23 @@ struct LoginView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .padding(.bottom, 30)
-                    .background(Color.clear)
                 }
             } else {
-                VStack {
-                    HStack {
-                        Button("Go to AR Experience") {
-                            showARView.toggle()
+                ZStack{
+                    Color(red: 0.19, green: 0.29, blue: 0.21)
+                        .ignoresSafeArea()
+                    VStack {
+                        HStack {
+                            Button("Go to AR Experience") {
+                                showARView.toggle()
+                            }
+                            .padding()
+                            .background(Color(red: 0.25, green: 0.7, blue: 0.3))
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
                         }
-                        .padding()
-                        .background(Color(red: 1.0, green: 0.4, blue: 0.6))
-                        .foregroundColor(.white)
-                        .cornerRadius(8)
+                        MediaUploadView()
                     }
-                    MediaUploadView()
                 }
             }
         } else {
@@ -112,18 +224,41 @@ struct MediaUploadView: View {
         ZStack(alignment: .top) {
             Color(red: 0.19, green: 0.29, blue: 0.21)
                 .ignoresSafeArea()
-            VStack(spacing: 0) {
-                // AR Experience button at the top
-                HStack {
-                    Spacer()
-                    // The button to AR Experience is handled in LoginView
+            TabView(selection: $selectedTab) {
+                // Home Tab
+                ZStack {
+                    Color(red: 0.19, green: 0.29, blue: 0.21).ignoresSafeArea()
+                    VStack(spacing: 32) {
+                        Image("Subject")
+                            .resizable()
+                            .frame(width: 80, height: 80)
+                            .cornerRadius(12)
+                        Text("Welcome to the Memory Garden")
+                            .font(.title)
+                            .bold()
+                            .foregroundColor(.white)
+                        Text("Capture, upload, and recall your favorite moments in AR.\nNavigate using the tabs below.")
+                            .font(.body)
+                            .foregroundColor(.white)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+                        Spacer()
+                    }
+                    .padding(.top, 60)
+                    .padding(.horizontal)
                 }
-                // TabView for Upload, Query, Cache
-                TabView(selection: $selectedTab) {
-                    // Upload Tab
+                .tag(0)
+                .tabItem {
+                    Label("Home", systemImage: "house")
+                }
+
+                // Upload Tab
+                ZStack {
+                    Color(red: 0.19, green: 0.29, blue: 0.21).ignoresSafeArea()
                     ScrollView {
                         VStack(spacing: 20) {
-                            Text("Upload a Photo or Video")
+                            // Go to AR Experience button at top
+                            Text("Upload a Photo")
                                 .font(.title2)
                                 .bold()
 
@@ -133,7 +268,8 @@ struct MediaUploadView: View {
                                     .font(.headline)
                                     .padding()
                                     .frame(maxWidth: .infinity)
-                                    .background(Color.blue.opacity(0.2))
+                                    .background(Color(red: 0.35, green: 0.56, blue: 0.35))
+                                    .foregroundColor(.white)
                                     .cornerRadius(10)
                             }
                             .onChange(of: selectedItem) { newItem in
@@ -192,7 +328,8 @@ struct MediaUploadView: View {
                                 Text("Upload to Server")
                                     .foregroundColor(.white)
                                     .padding()
-                                    .background(Color(red: 0.5, green: 0.0, blue: 0.0))
+                                    .frame(maxWidth: .infinity)
+                                    .background(Color(red: 0.8, green: 0.4, blue: 0.4))
                                     .cornerRadius(8)
                             }
                             .disabled(isUploading)
@@ -209,22 +346,31 @@ struct MediaUploadView: View {
                         }
                         .padding()
                     }
-                    .tag(0)
-                    .tabItem {
-                        Label("Upload", systemImage: "square.and.arrow.up")
-                    }
+                }
+                .tag(1)
+                .tabItem {
+                    Label("Upload", systemImage: "square.and.arrow.up")
+                }
 
-                    // Query Tab
+                // Query Tab
+                ZStack {
+                    Color(red: 0.19, green: 0.29, blue: 0.21).ignoresSafeArea()
                     ScrollView {
                         VStack(spacing: 20) {
                             Text("Custom Query to Backend")
                                 .font(.title2)
                                 .bold()
 
-                            Button("Open Query Box") {
+                            Button(action: {
                                 showQueryBox = true
+                            }) {
+                                Text("Open Query Box")
+                                    .foregroundColor(.white)
+                                    .padding()
+                                    .frame(maxWidth: .infinity)
+                                    .background(Color(red: 0.85, green: 0.55, blue: 0.45))
+                                    .cornerRadius(10)
                             }
-                            .buttonStyle(.bordered)
 
                             if showQueryBox {
                                 VStack(spacing: 10) {
@@ -258,12 +404,15 @@ struct MediaUploadView: View {
                         }
                         .padding()
                     }
-                    .tag(1)
-                    .tabItem {
-                        Label("Query", systemImage: "magnifyingglass")
-                    }
+                }
+                .tag(2)
+                .tabItem {
+                    Label("Query", systemImage: "magnifyingglass")
+                }
 
-                    // Cache Tab
+                // Cache Tab
+                ZStack {
+                    Color(red: 0.19, green: 0.29, blue: 0.21).ignoresSafeArea()
                     ScrollView {
                         VStack(spacing: 20) {
                             Group {
@@ -286,7 +435,7 @@ struct MediaUploadView: View {
                                         }
                                         .padding(.horizontal)
                                     }
-                                    Button("Clear Cached Images") {
+                                    Button(action: {
                                         let cacheFolder = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!.appendingPathComponent("FlowerImageCache")
                                         if let files = try? FileManager.default.contentsOfDirectory(at: cacheFolder, includingPropertiesForKeys: nil) {
                                             for file in files {
@@ -294,9 +443,15 @@ struct MediaUploadView: View {
                                             }
                                         }
                                         cacheRefreshTrigger.toggle()
+                                    }) {
+                                        Text("Clear Cached Images")
+                                            .font(.headline).bold()
+                                            .foregroundColor(Color.red)
+                                            .padding()
+                                            .frame(maxWidth: .infinity)
+                                            .background(Color(red: 0.25, green: 0.4, blue: 0.25))
+                                            .cornerRadius(10)
                                     }
-                                    .buttonStyle(.bordered)
-                                    .foregroundColor(.red)
                                     .padding(.top, 8)
                                 } else {
                                     Text("No cached images found.")
@@ -307,15 +462,25 @@ struct MediaUploadView: View {
                             Spacer()
                         }
                         .padding()
-                        .id(cacheRefreshTrigger) // trigger reload when cache is cleared
-                    }
-                    .tag(2)
-                    .tabItem {
-                        Label("Cache", systemImage: "photo.stack")
+                        .id(cacheRefreshTrigger)
                     }
                 }
-                .accentColor(.green)
+                .tag(3)
+                .tabItem {
+                    Label("Cache", systemImage: "photo.stack")
+                }
+
+                // Survey Tab
+                ZStack {
+                    Color(red: 0.19, green: 0.29, blue: 0.21).ignoresSafeArea()
+                    SurveyView()
+                }
+                .tag(4)
+                .tabItem {
+                    Label("Survey", systemImage: "doc.text")
+                }
             }
+            .accentColor(Color(red: 0.35, green: 0.56, blue: 0.35))
         }
     }
 }
@@ -332,14 +497,12 @@ extension Notification.Name {
 struct ContentView: View {
     @State private var meshOn = false
     @State private var showPopup = false
-    @State private var showConnectionAlert = false
-    @State private var connectionMessage = ""
     @State private var currentMemory: MediaItem?
     
     var body: some View {
         ZStack {
             ARViewContainer().ignoresSafeArea()
-            
+
             // Popup showing memory content
             if showPopup, let memory = currentMemory {
                 Color.black.opacity(0.5)
@@ -395,41 +558,10 @@ struct ContentView: View {
                     }
                     .buttonStyle(.borderedProminent)
 
-                    Button("Scatter +5") {
-                        NotificationCenter.default.post(name: .scatterNow, object: 5)
-                    }
-                    .buttonStyle(.bordered)
-
                     Button("Clear") {
                         NotificationCenter.default.post(name: .clearGarden, object: nil)
                     }
                     .buttonStyle(.bordered)
-
-                    Button("Test Backend Connection") {
-                        connectionMessage = "Checking..."
-                        showConnectionAlert = true
-                        
-                        print("🌐 Attempting to contact backend at \(APIService.shared.baseURL)/random_memories")
-                        
-                        APIService.shared.fetchRandomMemories { items in
-                            DispatchQueue.main.async {
-                                if items.isEmpty {
-                                    connectionMessage = "⚠️ Backend not reachable or no media uploaded."
-                                } else {
-                                    connectionMessage = "✅ Connected! Received \(items.count) memories."
-                                }
-                                showConnectionAlert = true
-                            }
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .alert(isPresented: $showConnectionAlert) {
-                        Alert(
-                            title: Text("Backend Connection"),
-                            message: Text(connectionMessage),
-                            dismissButton: .default(Text("OK"))
-                        )
-                    }
                 }
 
                 Spacer()
@@ -443,25 +575,10 @@ struct ContentView: View {
                 currentMemory = memory
                 withAnimation(.spring()) { showPopup = true }
             }
-        }.onAppear {
-            preloadImages(count: 5)
         }
-    }
-    private func preloadImages(count: Int) {
-        APIService.shared.fetchRandomMemories { items in
-            let topItems = Array(items.prefix(count))
-            for memory in topItems {
-                guard let url = URL(string: memory.url) else { continue }
-                // Skip if already cached
-                if ImageCache.shared.isCached(memory.id) { continue }
-
-                URLSession.shared.dataTask(with: url) { data, _, _ in
-                    if let data = data, let image = UIImage(data: data) {
-                        ImageCache.shared.saveImage(image, for: memory.id)
-                        print("✅ Cached image for:", memory.caption)
-                    }
-                }.resume()
-            }
+        .onAppear {
+            // Preload random images using cache method
+            ImageCache.shared.preloadRandomImages(batchSize: 5)
         }
     }
 }
@@ -521,6 +638,8 @@ struct ARViewContainer: UIViewRepresentable {
 
     // MARK: - Coordinator
     class Coordinator: NSObject, ARSessionDelegate {
+        // Track which memory IDs have been used for this batch of flowers
+        static var usedMemoryIDs = Set<String>()
         weak var arView: ARView?
         private let flowerUSDZName = "Flower.usdz"
         private var flowerCachedOriginal: ModelEntity?
@@ -594,10 +713,33 @@ struct ARViewContainer: UIViewRepresentable {
             flower.generateCollisionShapes(recursive: true)
             flower.name = "flower-\(UUID().uuidString)"
 
-            // Assign one random memory
+            // Assign one random memory, avoiding duplicates in this batch
             APIService.shared.fetchRandomMemories { items in
-                if let randomMemory = items.randomElement() {
-                    flower.components.set(MemoryComponent(memory: randomMemory))
+                // Filter out IDs already used in this batch
+                let unused = items.filter { !Coordinator.usedMemoryIDs.contains($0.id) }
+                let selectedMemory: MediaItem?
+                if let memory = unused.randomElement() {
+                    selectedMemory = memory
+                } else {
+                    // If all used, just pick any (should be rare)
+                    selectedMemory = items.randomElement()
+                }
+                if let memory = selectedMemory {
+                    flower.components.set(MemoryComponent(memory: memory))
+                    Coordinator.usedMemoryIDs.insert(memory.id)
+                }
+                // After 10 flowers, reset usedMemoryIDs for a new batch
+                DispatchQueue.main.async {
+                    if self.gardenAnchors.count >= 10 {
+                        Coordinator.usedMemoryIDs.removeAll()
+                    }
+                }
+            }
+
+            // Lazy cache refresh: if cache is low, trigger background refresh
+            if ImageCache.shared.cachedCount() <= 2 {
+                DispatchQueue.global(qos: .background).async {
+                    ImageCache.shared.ensureMinimumCache()
                 }
             }
 
@@ -730,11 +872,11 @@ struct ARViewContainer: UIViewRepresentable {
                 return
             }
 
-            // Otherwise, if it's been >5 seconds since any were seen, spawn 2 new ones
+            // Otherwise, if it's been >3 seconds since any were seen, spawn 3 new ones
             let timeSinceSeen = Date().timeIntervalSince(lastFlowerVisibleTime)
-            if timeSinceSeen > 5 {
-                print("🌸 No flowers in view for 5s — planting new ones")
-                for _ in 0..<2 {
+            if timeSinceSeen > 3 {
+                print("🌸 No flowers in view for 3s — planting new ones")
+                for _ in 0..<3 {
                     let randomPoint = CGPoint(
                         x: arView.bounds.midX + CGFloat.random(in: -100...100),
                         y: arView.bounds.midY + CGFloat.random(in: -100...100)

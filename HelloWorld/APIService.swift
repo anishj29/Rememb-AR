@@ -37,6 +37,44 @@ class APIService {
             }
         }.resume()
     }
+    
+    func uploadMedia(data: Data, type: String, caption: String, completion: @escaping (Bool) -> Void) {
+        guard let url = URL(string: "\(baseURL)/upload_media") else {
+            completion(false)
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+
+        // Construct multipart/form-data request
+        let boundary = UUID().uuidString
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+        var body = Data()
+        body.append("--\(boundary)\r\n")
+        body.append("Content-Disposition: form-data; name=\"caption\"\r\n\r\n")
+        body.append(caption.data(using: .utf8)!)
+        body.append("\r\n")
+
+        body.append("--\(boundary)\r\n")
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"media.\(type == "video" ? "mp4" : "jpg")\"\r\n")
+        body.append("Content-Type: \(type == "video" ? "video/mp4" : "image/jpeg")\r\n\r\n")
+        body.append(data)
+        body.append("\r\n")
+        body.append("--\(boundary)--\r\n")
+        
+        request.httpBody = body
+
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                completion(true)
+            } else {
+                print("Upload error:", error?.localizedDescription ?? "Unknown error")
+                completion(false)
+            }
+        }.resume()
+    }
 
     func fetchRandomMemories(completion: @escaping ([MediaItem]) -> Void) {
         print("🌐 Attempting to contact backend at \(baseURL)/random_memories")

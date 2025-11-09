@@ -2,6 +2,203 @@ import SwiftUI
 import RealityKit
 import ARKit
 import Combine
+import PhotosUI
+import AVKit
+
+struct LoginView: View {
+    @State private var username = ""
+    @State private var password = ""
+    @State private var loggedIn = false
+    @State private var showLoginError = false
+    @State private var errorMessage = ""
+    @State private var showARView = false
+
+    var body: some View {
+        if loggedIn {
+            if showARView {
+                ZStack(alignment: .bottom) {
+                    ContentView()
+                    Button("Go to Uploads") {
+                        showARView.toggle()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.bottom, 30)
+                    .background(Color.clear)
+                }
+            } else {
+                VStack {
+                    HStack {
+                        Button("Go to AR Experience") {
+                            showARView.toggle()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .padding()
+                    }
+                    MediaUploadView()
+                }
+            }
+        } else {
+            VStack(spacing: 16) {
+                Text("Login to Continue")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                    .padding(.bottom, 8)
+
+                TextField("Username", text: $username)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .autocapitalization(.none)
+
+                SecureField("Password", text: $password)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+
+                Button("Login") {
+                    APIService.shared.login(username: username, password: password) { success, _ in
+                        DispatchQueue.main.async {
+                            if success {
+                                loggedIn = true
+                            } else {
+                                errorMessage = "Invalid username or password"
+                                showLoginError = true
+                            }
+                        }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .padding(.top, 8)
+            }
+            .padding()
+            .alert(isPresented: $showLoginError) {
+                Alert(
+                    title: Text("Login Failed"),
+                    message: Text(errorMessage),
+                    dismissButton: .default(Text("OK"))
+                )
+            }
+        }
+    }
+}
+
+struct MediaUploadView: View {
+    @State private var selectedItem: PhotosPickerItem?
+    @State private var selectedMediaData: Data?
+    @State private var selectedMediaType: String = "" // "image" or "video"
+    @State private var uploadStatus: String = ""
+    @State private var isUploading = false
+    @State private var caption: String = ""
+    
+    // Computed property for cached images
+    var cachedImages: [UIImage] {
+        let cacheFolder = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!.appendingPathComponent("FlowerImageCache")
+        guard let files = try? FileManager.default.contentsOfDirectory(at: cacheFolder, includingPropertiesForKeys: nil) else { return [] }
+        return files.compactMap { UIImage(contentsOfFile: $0.path) }
+    }
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            Text("Upload a Photo or Video")
+                .font(.title2)
+                .bold()
+
+            // MARK: Media Picker
+            PhotosPicker(selection: $selectedItem, matching: .any(of: [.images, .videos])) {
+                Label("Choose File", systemImage: "photo.on.rectangle")
+                    .font(.headline)
+                    .padding()
+                    .frame(maxWidth: .infinity)
+                    .background(Color.blue.opacity(0.2))
+                    .cornerRadius(10)
+            }
+            .onChange(of: selectedItem) { newItem in
+                guard let newItem else { return }
+                Task {
+                    if let data = try? await newItem.loadTransferable(type: Data.self) {
+                        selectedMediaData = data
+                        selectedMediaType = newItem.supportedContentTypes.contains(.movie) ? "video" : "image"
+                        uploadStatus = "✅ Selected \(selectedMediaType)"
+                    }
+                }
+            }
+
+            // MARK: Preview
+            if let data = selectedMediaData {
+                if selectedMediaType == "image", let image = UIImage(data: data) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(height: 200)
+                        .cornerRadius(12)
+                } else if selectedMediaType == "video" {
+                    Text("🎬 Video selected (preview not shown)")
+                        .font(.subheadline)
+                        .foregroundColor(.gray)
+                }
+            }
+
+            // Caption TextField
+            TextField("Enter caption", text: $caption)
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .padding(.horizontal)
+
+            // Show cached images previews
+            if !cachedImages.isEmpty {
+                Text("Previously Cached Images")
+                    .font(.headline)
+                    .padding(.top)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(Array(cachedImages.enumerated()), id: \.offset) { _, image in
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 100, height: 100)
+                                .clipped()
+                                .cornerRadius(8)
+                                .shadow(radius: 4)
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+            }
+
+            // MARK: Upload Button
+            Button(action: {
+                guard let mediaData = selectedMediaData else {
+                    uploadStatus = "⚠️ No media selected"
+                    return
+                }
+                isUploading = true
+                APIService.shared.uploadMedia(data: mediaData, type: selectedMediaType, caption: caption) { success in
+                    DispatchQueue.main.async {
+                        isUploading = false
+                        uploadStatus = success ? "✅ Upload successful!" : "❌ Upload failed"
+                        // Cache the uploaded image if it's an image type
+                        if success, selectedMediaType == "image", let data = selectedMediaData, let image = UIImage(data: data) {
+                            let id = UUID().uuidString
+                            ImageCache.shared.saveImage(image, for: id)
+                        }
+                        caption = ""
+                        selectedMediaData = nil
+                    }
+                }
+            }) {
+                Text("Upload to Server")
+            }
+            .disabled(isUploading)
+            .buttonStyle(.borderedProminent)
+            
+            if isUploading {
+                ProgressView("Uploading...")
+            }
+            
+            Text(uploadStatus)
+                .foregroundColor(.gray)
+                .font(.subheadline)
+            
+            Spacer()
+        }
+        .padding()
+    }
+}
 
 // MARK: - Notifications from SwiftUI → AR coordinator
 extension Notification.Name {
@@ -11,60 +208,8 @@ extension Notification.Name {
     static let flowerTapped = Notification.Name("flowerTapped") // AR → SwiftUI
 }
 
-//struct LoginView: View {
-//    @State private var username = ""
-//    @State private var password = ""
-//    @State private var loggedIn = false
-//    @State private var showLoginError = false   // new
-//    @State private var errorMessage = ""        // new
-//
-//    var body: some View {
-//        if loggedIn {
-//            ContentView()
-//        } else {
-//            VStack(spacing: 16) {
-//                Text("Login to Continue")
-//                    .font(.title2)
-//                    .fontWeight(.semibold)
-//                    .padding(.bottom, 8)
-//
-//                TextField("Username", text: $username)
-//                    .textFieldStyle(RoundedBorderTextFieldStyle())
-//                    .autocapitalization(.none)
-//
-//                SecureField("Password", text: $password)
-//                    .textFieldStyle(RoundedBorderTextFieldStyle())
-//
-//                Button("Login") {
-//                    APIService.shared.login(username: username, password: password) { success, _ in
-//                        DispatchQueue.main.async {
-//                            if success {
-//                                loggedIn = true
-//                            } else {
-//                                errorMessage = "Invalid username or password"
-//                                showLoginError = true
-//                            }
-//                        }
-//                    }
-//                }
-//                .buttonStyle(.borderedProminent)
-//                .padding(.top, 8)
-//            }
-//            .padding()
-//            // Alert for failed login
-//            .alert(isPresented: $showLoginError) {
-//                Alert(
-//                    title: Text("Login Failed"),
-//                    message: Text(errorMessage),
-//                    dismissButton: .default(Text("OK"))
-//                )
-//            }
-//        }
-//    }
-//}
-
+// MARK: - Main SwiftUI View
 struct ContentView: View {
-    @State private var showHello = false
     @State private var meshOn = false
     @State private var showPopup = false
     @State private var showConnectionAlert = false
@@ -75,21 +220,32 @@ struct ContentView: View {
         ZStack {
             ARViewContainer().ignoresSafeArea()
             
+            // Popup showing memory content
             if showPopup, let memory = currentMemory {
                 Color.black.opacity(0.5)
                     .ignoresSafeArea()
                     .onTapGesture { withAnimation { showPopup = false } }
 
                 VStack {
-                    AsyncImage(url: URL(string: memory.url)) { image in
-                        image.resizable()
-                             .scaledToFit()
-                             .frame(maxWidth: 300)
-                             .cornerRadius(16)
-                             .shadow(radius: 10)
-                             .padding()
-                    } placeholder: {
-                        ProgressView()
+                    if let cached = ImageCache.shared.image(for: memory.id) {
+                        Image(uiImage: cached)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 300)
+                            .cornerRadius(16)
+                            .shadow(radius: 10)
+                            .padding()
+                    } else {
+                        AsyncImage(url: URL(string: memory.url)) { image in
+                            image.resizable()
+                                 .scaledToFit()
+                                 .frame(maxWidth: 300)
+                                 .cornerRadius(16)
+                                 .shadow(radius: 10)
+                                 .padding()
+                        } placeholder: {
+                            ProgressView()
+                        }
                     }
 
                     Text(memory.caption)
@@ -105,6 +261,7 @@ struct ContentView: View {
                 .transition(.scale.combined(with: .opacity))
             }
 
+            // Controls overlay
             VStack(spacing: 12) {
                 Text("Scan slowly.\nTap a flower → popup")
                     .multilineTextAlignment(.center)
@@ -147,7 +304,11 @@ struct ContentView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .alert(isPresented: $showConnectionAlert) {
-                        Alert(title: Text("Backend Connection"), message: Text(connectionMessage), dismissButton: .default(Text("OK")))
+                        Alert(
+                            title: Text("Backend Connection"),
+                            message: Text(connectionMessage),
+                            dismissButton: .default(Text("OK"))
+                        )
                     }
                 }
 
@@ -156,19 +317,36 @@ struct ContentView: View {
             .padding(.top, 16)
             .padding(.horizontal, 12)
         }
-        .onReceive(NotificationCenter.default.publisher(for: .flowerTapped)) { _ in
-            // When user taps a flower, fetch random media from backend
-            APIService.shared.fetchRandomMemories { items in
-                if let first = items.first {
-                    currentMemory = first
-                    withAnimation(.spring()) { showPopup = true }
-                }
+        // Popup opens when flower tapped
+        .onReceive(NotificationCenter.default.publisher(for: .flowerTapped)) { note in
+            if let memory = note.object as? MediaItem {
+                currentMemory = memory
+                withAnimation(.spring()) { showPopup = true }
+            }
+        }.onAppear {
+            preloadImages(count: 5)
+        }
+    }
+    private func preloadImages(count: Int) {
+        APIService.shared.fetchRandomMemories { items in
+            let topItems = Array(items.prefix(count))
+            for memory in topItems {
+                guard let url = URL(string: memory.url) else { continue }
+                // Skip if already cached
+                if ImageCache.shared.isCached(memory.id) { continue }
+
+                URLSession.shared.dataTask(with: url) { data, _, _ in
+                    if let data = data, let image = UIImage(data: data) {
+                        ImageCache.shared.saveImage(image, for: memory.id)
+                        print("✅ Cached image for:", memory.caption)
+                    }
+                }.resume()
             }
         }
     }
 }
 
-// MARK: - AR container
+// MARK: - AR Container
 struct ARViewContainer: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -193,7 +371,7 @@ struct ARViewContainer: UIViewRepresentable {
         arView.environment.sceneUnderstanding.options.insert(.occlusion)
         arView.environment.sceneUnderstanding.options.insert(.physics)
 
-        // Coaching
+        // Coaching overlay
         let coach = ARCoachingOverlayView()
         coach.session = arView.session
         coach.goal = .horizontalPlane
@@ -206,7 +384,7 @@ struct ARViewContainer: UIViewRepresentable {
             coach.trailingAnchor.constraint(equalTo: arView.trailingAnchor)
         ])
 
-        // Coordinator + gestures
+        // Coordinator setup
         context.coordinator.arView = arView
         arView.session.delegate = context.coordinator
         context.coordinator.bindUI()
@@ -214,9 +392,8 @@ struct ARViewContainer: UIViewRepresentable {
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
         arView.addGestureRecognizer(tap)
 
-        // Auto-scatter ONCE when tracking stabilizes (only 10)
+        // Scatter flowers once
         context.coordinator.startAutoScatterOnce(targetCount: 10)
-
         return arView
     }
 
@@ -225,45 +402,37 @@ struct ARViewContainer: UIViewRepresentable {
     // MARK: - Coordinator
     class Coordinator: NSObject, ARSessionDelegate {
         weak var arView: ARView?
-
         private let flowerUSDZName = "Flower.usdz"
         private var flowerCachedOriginal: ModelEntity?
         private var hasAutoScattered = false
         private var gardenAnchors: [AnchorEntity] = []
-
-        // NEW: monitoring
         private var lastFlowerVisibleTime: Date = .now
         private var visibilityTimer: Timer?
 
-        // Load once, then clone for each placement
+        // MARK: - Load Flower
         private func loadFlowerModel() -> ModelEntity {
             if let cached = flowerCachedOriginal {
                 return cached.clone(recursive: true)
             }
-
             if let model = try? Entity.loadModel(named: flowerUSDZName) as? ModelEntity {
                 flowerCachedOriginal = model
                 return model.clone(recursive: true)
             } else {
-                // Fallback to the procedural flower if the asset isn’t in the bundle
                 return makeProceduralFlower()
             }
         }
 
-        // Make the model feel “right” in AR: fix base to ground, normalize size, add shadow
+        // Normalize height and shadow
         private func normalizeAndGround(_ entity: ModelEntity, targetHeight: Float = 0.15) {
-            // 1) Normalize height (so different assets feel consistent)
             let bounds = entity.visualBounds(relativeTo: nil)
             let currentHeight = max(0.001, bounds.extents.y)
             let scaleFactor = targetHeight / currentHeight
             entity.scale *= scaleFactor
 
-            // 2) Snap base to y=0 (so it sits on the surface)
             let newBounds = entity.visualBounds(relativeTo: nil)
             let lift = -newBounds.min.y
             entity.position.y += lift
 
-            // 3) Add a subtle shadow blob for grounding
             let shadowSize = max(0.12, min(0.25, targetHeight * 0.9))
             var shadowMat = UnlitMaterial()
             shadowMat.color = .init(tint: UIColor(white: 0, alpha: 0.15))
@@ -276,42 +445,48 @@ struct ARViewContainer: UIViewRepresentable {
             entity.addChild(shadow)
         }
 
+        // MARK: - Place Flowers
         private func plantFlower(at transform: float4x4) {
             guard let arView else { return }
             let anchor = AnchorEntity(world: transform)
-
-            // Load USDZ or fallback
             let flower = loadFlowerModel()
-            // Normalize + ground to surface
+            // ✅ Limit to 10 flowers at a time
+            if gardenAnchors.count >= 10 {
+                // Remove the oldest flower
+                if let oldest = gardenAnchors.first {
+                    arView.scene.removeAnchor(oldest)
+                    gardenAnchors.removeFirst()
+                }
+            }
+            // Random height + scale
             let randomHeight: Float = Float.random(in: 0.13...0.18)
             normalizeAndGround(flower, targetHeight: randomHeight)
-
             let widthScale: Float = Float.random(in: 0.9...1.1)
             flower.scale.x *= widthScale
             flower.scale.z *= widthScale
-            
-            // (Optional) slight randomization so a cluster looks natural
             flower.orientation *= simd_quatf(angle: Float.random(in: -0.25...0.25), axis: [0,1,0])
             flower.scale *= Float.random(in: 0.9...1.15)
 
-            // Keep it static (no falling)
+            // Physics and collisions
             let physMat = PhysicsMaterialResource.generate(friction: 0.9, restitution: 0.05)
             let body = PhysicsBodyComponent(massProperties: .default, material: physMat, mode: .static)
             flower.components.set(body)
             flower.generateCollisionShapes(recursive: true)
-
-            // Name so taps can be recognized
             flower.name = "flower-\(UUID().uuidString)"
-            flower.generateCollisionShapes(recursive: true)
-            
-            
-            
+
+            // Assign one random memory
+            APIService.shared.fetchRandomMemories { items in
+                if let randomMemory = items.randomElement() {
+                    flower.components.set(MemoryComponent(memory: randomMemory))
+                }
+            }
+
             anchor.addChild(flower)
             arView.scene.addAnchor(anchor)
             gardenAnchors.append(anchor)
         }
 
-        // Wire SwiftUI buttons
+        // MARK: - Scatter / Auto
         func bindUI() {
             NotificationCenter.default.addObserver(forName: .toggleMesh, object: nil, queue: .main) { [weak self] note in
                 guard let self, let arView = self.arView,
@@ -330,7 +505,6 @@ struct ARViewContainer: UIViewRepresentable {
             }
         }
 
-        // Scatter only once automatically when tracking is stable
         func startAutoScatterOnce(targetCount: Int) {
             guard !hasAutoScattered else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
@@ -343,18 +517,14 @@ struct ARViewContainer: UIViewRepresentable {
             if case .normal = arView.session.currentFrame?.camera.trackingState ?? .notAvailable {
                 scatterFlowers(count: count)
                 hasAutoScattered = true
-
-                // start watching for "no flowers in view"
                 startFlowerMonitor()
             } else {
-                // re-check shortly, but won’t repeat after success
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
                     self?.waitForStableTrackingThenScatter(count)
                 }
             }
         }
 
-        // Scatter N flowers: sample a sparse grid of screen points and raycast to existing geometry
         func scatterFlowers(count: Int) {
             guard let arView else { return }
             let cols = max(2, Int(ceil(sqrt(Double(count)))))
@@ -367,7 +537,6 @@ struct ARViewContainer: UIViewRepresentable {
                     let u = (CGFloat(c) + .random(in: 0.25...0.75)) / CGFloat(cols)
                     let v = (CGFloat(r) + .random(in: 0.25...0.75)) / CGFloat(rows)
                     let pt = CGPoint(x: arView.bounds.width * u, y: arView.bounds.height * v)
-
                     if let hit = arView.raycast(from: pt, allowing: .existingPlaneGeometry, alignment: .any).first {
                         plantFlower(at: hit.worldTransform)
                         placed += 1
@@ -376,82 +545,85 @@ struct ARViewContainer: UIViewRepresentable {
             }
         }
 
-        // Tap → find a flower (walk up to a named ancestor) → notify SwiftUI
+        // MARK: - Tap Handling
         @objc func handleTap(_ g: UITapGestureRecognizer) {
             guard let arView else { return }
             let pt = g.location(in: arView)
             guard let hit = arView.entity(at: pt) else { return }
 
-            // Walk up the parent chain until we find "flower-" on the name
             var node: Entity? = hit
-            var found = false
             while let e = node {
                 if let me = e as? ModelEntity, me.name.hasPrefix("flower-") {
-                    found = true
-                    break
+                    if let memoryComp = me.components[MemoryComponent.self] as? MemoryComponent {
+                        NotificationCenter.default.post(name: .flowerTapped, object: memoryComp.memory)
+                    } else {
+                        print("⚠️ Flower has no memory component")
+                    }
+                    return
                 }
                 node = e.parent
             }
-            if found {
-                NotificationCenter.default.post(name: .flowerTapped, object: nil)
-            }
         }
 
-        // MARK: - NEW: monitoring logic
-
-        // start timer to check every second
-        func startFlowerMonitor() {
+        // MARK: - Helpers
+        private func startFlowerMonitor() {
             visibilityTimer?.invalidate()
             visibilityTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
                 self?.checkFlowerVisibility()
             }
             lastFlowerVisibleTime = .now
         }
-
-        // every frame, see if any flower is in front of camera
-        func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        
+        // MARK: - Visibility check
+        private func checkFlowerVisibility() {
             guard let arView else { return }
 
-            let camTransform = frame.camera.transform
-            let camPos = simd_make_float3(camTransform.columns.3)
-            let forward = -simd_make_float3(camTransform.columns.2) // camera forward
+            // Get the camera transform
+            guard let frame = arView.session.currentFrame else { return }
+            let cameraTransform = frame.camera.transform
+            let cameraPosition = simd_make_float3(cameraTransform.columns.3)
+            let cameraForward = -simd_make_float3(cameraTransform.columns.2)
 
+            // Count how many flowers are in view
             var visibleCount = 0
             for anchor in gardenAnchors {
                 guard let flower = anchor.children.first else { continue }
-                let pos = flower.position(relativeTo: nil)
-                let dir = normalize(pos - camPos)
-                let dot = simd_dot(dir, forward)
-                if dot > 0.5 && distance(pos, camPos) < 2.5 {
+                let flowerPosition = flower.position(relativeTo: nil)
+
+                // Vector from camera to flower
+                let directionToFlower = normalize(flowerPosition - cameraPosition)
+                let distance = simd_distance(cameraPosition, flowerPosition)
+
+                // Dot product to check if within ~45° of the camera's forward direction
+                let dot = simd_dot(cameraForward, directionToFlower)
+                let isFacing = dot > 0.7   // adjust for FOV
+                let isCloseEnough = distance < 3.0
+
+                if isFacing && isCloseEnough {
                     visibleCount += 1
                 }
             }
 
+            // If we see at least 1 flower, reset the timer
             if visibleCount > 0 {
                 lastFlowerVisibleTime = .now
+                return
             }
-        }
 
-        // called by timer
-        private func checkFlowerVisibility() {
-            guard let arView else { return }
-
+            // Otherwise, if it's been >5 seconds since any were seen, spawn 2 new ones
             let timeSinceSeen = Date().timeIntervalSince(lastFlowerVisibleTime)
-            
-            if timeSinceSeen > 1 {
-                for i in 0..<2 {
-                    // Wider scatter in screen space
-                    let center = CGPoint(
-                        x: arView.bounds.midX + CGFloat.random(in: -120...120),
-                        y: arView.bounds.midY + CGFloat.random(in: -120...120)
+            if timeSinceSeen > 5 {
+                print("🌸 No flowers in view for 5s — planting new ones")
+                for _ in 0..<2 {
+                    let randomPoint = CGPoint(
+                        x: arView.bounds.midX + CGFloat.random(in: -100...100),
+                        y: arView.bounds.midY + CGFloat.random(in: -100...100)
                     )
-                    if let hit = arView.raycast(from: center,
+
+                    if let hit = arView.raycast(from: randomPoint,
                                                 allowing: .existingPlaneGeometry,
                                                 alignment: .any).first {
-
                         var transform = hit.worldTransform
-
-                        // Apply a small world offset (in meters) for extra spacing
                         let randomOffset = SIMD3<Float>(
                             Float.random(in: -0.25...0.25),
                             0,
@@ -459,15 +631,14 @@ struct ARViewContainer: UIViewRepresentable {
                         )
                         transform.columns.3.x += randomOffset.x
                         transform.columns.3.z += randomOffset.z
-
                         plantFlower(at: transform)
                     }
                 }
+
                 lastFlowerVisibleTime = .now
             }
         }
 
-        // Compatibility-safe procedural flower (box stem + squashed spheres)
         private func makeProceduralFlower() -> ModelEntity {
             let stemBox = MeshResource.generateBox(size: 0.01)
             let stemMat  = SimpleMaterial(color: UIColor(red: 0.05, green: 0.6, blue: 0.2, alpha: 1), isMetallic: false)
@@ -483,7 +654,8 @@ struct ARViewContainer: UIViewRepresentable {
                 let p = ModelEntity(mesh: petalMesh, materials: [petalMat])
                 p.scale = [1.8, 0.6, 1.0]
                 p.position = [0, 0.175, 0]
-                p.orientation = simd_quatf(angle: angle, axis: [0,1,0]) * simd_quatf(angle: .pi/2.8, axis: [1,0,0])
+                p.orientation = simd_quatf(angle: angle, axis: [0,1,0]) *
+                                simd_quatf(angle: .pi/2.8, axis: [1,0,0])
                 petals.append(p)
             }
 
@@ -494,9 +666,11 @@ struct ARViewContainer: UIViewRepresentable {
             let leafMesh = MeshResource.generateSphere(radius: 0.02)
             let leafMat  = SimpleMaterial(color: UIColor(red: 0.1, green: 0.7, blue: 0.25, alpha: 1), isMetallic: false)
             let leafL = ModelEntity(mesh: leafMesh, materials: [leafMat])
-            leafL.scale = [2.2, 0.5, 1.2]; leafL.position = [-0.03, 0.08, 0]; leafL.orientation = simd_quatf(angle: .pi/3, axis: [0,0,1])
+            leafL.scale = [2.2, 0.5, 1.2]; leafL.position = [-0.03, 0.08, 0]
+            leafL.orientation = simd_quatf(angle: .pi/3, axis: [0,0,1])
             let leafR = ModelEntity(mesh: leafMesh, materials: [leafMat])
-            leafR.scale = [2.2, 0.5, 1.2]; leafR.position = [ 0.03, 0.11, 0]; leafR.orientation = simd_quatf(angle: -.pi/3, axis: [0,0,1])
+            leafR.scale = [2.2, 0.5, 1.2]; leafR.position = [0.03, 0.11, 0]
+            leafR.orientation = simd_quatf(angle: -.pi/3, axis: [0,0,1])
 
             let root = ModelEntity()
             [stem, center, leafL, leafR].forEach { root.addChild($0) }
@@ -506,7 +680,13 @@ struct ARViewContainer: UIViewRepresentable {
     }
 }
 
-// MARK: - Small helpers
+// MARK: - Custom Component
+struct MemoryComponent: Component {
+    var memory: MediaItem
+}
+extension MemoryComponent: Codable {}
+
+// MARK: - Helpers
 extension float4x4 {
     init(translation t: SIMD3<Float>) {
         self = matrix_identity_float4x4
@@ -514,5 +694,7 @@ extension float4x4 {
     }
 }
 extension Float {
-    func clamped(to range: ClosedRange<Float>) -> Float { min(max(self, range.lowerBound), range.upperBound) }
+    func clamped(to range: ClosedRange<Float>) -> Float {
+        min(max(self, range.lowerBound), range.upperBound)
+    }
 }

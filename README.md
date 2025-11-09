@@ -171,10 +171,6 @@ The system uses the **Efraimidis-Spirakis algorithm** for weighted random sampli
 - **Family Engagement**: Caretakers can track memory recall progress
 - **Cognitive Training**: Regular AR sessions to maintain cognitive function
 
-## 📝 License
-
-This project was developed for HealthHacks 2025.
-
 ## 🤝 Contributing
 
 This is a research project focused on dementia care. Contributions that improve memory recall effectiveness, accessibility, or user experience are welcome.

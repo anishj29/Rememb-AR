@@ -4,7 +4,7 @@ from pydantic import BaseModel
 import firebase_admin
 from firebase_admin import credentials, firestore, storage
 import traceback
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from random import random
 from typing import List
 import os
@@ -32,7 +32,7 @@ app.add_middleware(
 FIREBASE_KEY = os.getenv("FIREBASE_KEY")
 cred = credentials.Certificate(FIREBASE_KEY)
 firebase_admin.initialize_app(cred, {
-    "storageBucket": "healthhacks2025-71347.firebasestorage.app"
+    "storageBucket": "rememb-ar.firebasestorage.app"
 })
 
 db = firestore.client()
@@ -43,6 +43,42 @@ GEMINI_KEY = os.getenv("GEMINI_KEY")
 
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
+
+@app.get("/")
+def root():
+    """Root endpoint providing API information"""
+    return {
+        "message": "Rememb-AR API",
+        "version": "1.0.0",
+        "docs": "/docs",
+        "endpoints": {
+            "authentication": {
+                "POST /login": "User authentication"
+            },
+            "media": {
+                "POST /upload_media": "Upload images/videos with captions",
+                "GET /media_list": "Retrieve all uploaded memories",
+                "GET /random_memories?k={count}": "Get weighted random memories"
+            },
+            "memory_enhancement": {
+                "POST /update_weights_by_similarity": "Update memory weights based on semantic similarity",
+                "PUT /reset_weights": "Reset all memory weights to default"
+            },
+            "surveys": {
+                "GET /generate_survey?limit={n}&min_memories={m}": "Generate AI-powered memory recall survey"
+            }
+        }
+    }
+
+@app.get("/favicon.ico")
+def favicon():
+    """Handle favicon requests to prevent 404 errors"""
+    return Response(status_code=204)
+
+@app.get("/.well-known/appspecific/com.chrome.devtools.json")
+def chrome_devtools():
+    """Handle Chrome DevTools requests to prevent 404 errors"""
+    return Response(status_code=204)
 
 class LoginRequest(BaseModel):
     username: str

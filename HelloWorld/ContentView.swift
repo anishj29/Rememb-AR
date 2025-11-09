@@ -85,6 +85,9 @@ struct MediaUploadView: View {
     @State private var uploadStatus: String = ""
     @State private var isUploading = false
     @State private var caption: String = ""
+    @State private var showQueryBox = false
+    @State private var customQuery = ""
+    @State private var queryResponse = ""
     
     // Computed property for cached images
     var cachedImages: [UIImage] {
@@ -159,6 +162,44 @@ struct MediaUploadView: View {
                     .padding(.horizontal)
                 }
             }
+            
+            Divider()
+            Text("Custom Query to Backend")
+                .font(.headline)
+
+            Button("Open Query Box") {
+                showQueryBox = true
+            }
+            .buttonStyle(.bordered)
+
+            if showQueryBox {
+                VStack(spacing: 10) {
+                    TextField("Enter your custom query", text: $customQuery)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .padding(.horizontal)
+
+                    Button("Send Query") {
+                        guard !customQuery.isEmpty else {
+                            queryResponse = "⚠️ Please enter a query first."
+                            return
+                        }
+                        APIService.shared.sendCustomQuery(customQuery) { response in
+                            DispatchQueue.main.async {
+                                queryResponse = response
+                            }
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+
+            if !queryResponse.isEmpty {
+                Text(queryResponse)
+                    .foregroundColor(.gray)
+                    .font(.subheadline)
+                    .padding(.top, 4)
+            }
+            Divider()
 
             // MARK: Upload Button
             Button(action: {

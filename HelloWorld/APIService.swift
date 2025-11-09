@@ -75,6 +75,39 @@ class APIService {
             }
         }.resume()
     }
+    
+    func sendCustomQuery(_ query: String, completion: @escaping (String) -> Void) {
+        guard let url = URL(string: "\(baseURL)/update_weights_by_similarity") else {
+            completion("❌ Invalid URL")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: String] = ["query": query]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                completion("❌ Network error: \(error.localizedDescription)")
+                return
+            }
+
+            guard let data = data else {
+                completion("❌ No data returned")
+                return
+            }
+
+            if let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let message = result["message"] as? String {
+                completion(message)
+            } else {
+                completion("✅ Query sent successfully.")
+            }
+        }.resume()
+    }
 
     func fetchRandomMemories(completion: @escaping ([MediaItem]) -> Void) {
         print("🌐 Attempting to contact backend at \(baseURL)/random_memories")

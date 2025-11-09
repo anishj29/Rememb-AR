@@ -207,7 +207,7 @@ def random_memories(k: int = Query(default=1, ge=1, description="Number of rando
         # This ensures images that have been shown recently won't be shown again soon
         try:
             for doc_ref in selected_doc_refs:
-                doc_ref.update({"weight": 0.1})
+                doc_ref.update({"weight": 0})
             print(f"Updated weights to 0.1 for {len(selected_doc_refs)} selected memories")
         except Exception as update_error:
             # Log error but don't fail the request

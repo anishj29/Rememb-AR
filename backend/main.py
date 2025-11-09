@@ -719,7 +719,7 @@ The survey tests their general knowledge and recall about their life, possession
 Based on these memories from their collection (these are descriptions of their photos):
 {memory_summary}
 
-Generate exactly 5 questions that:
+Generate exactly 3 questions that:
 1. Tests general knowledge and recall about their life (NOT specific photo details)
 2. Uses ONLY multiple choice (MCQ) question type - NO short answer questions
 3. Uses ONLY "easy" difficulty for all questions
@@ -754,7 +754,7 @@ For each question:
 - Questions should test general knowledge/recall, not photo recognition
 - Include related_memory_ids to track which memories the question is based on
 
-Return ONLY a JSON array with exactly 5 questions using this exact structure:
+Return ONLY a JSON array with exactly 3 questions using this exact structure:
 [
   {{
     "question": "What breed is your dog?",
@@ -777,7 +777,7 @@ Return ONLY a JSON array with exactly 5 questions using this exact structure:
 ]
 
 Important:
-- Generate EXACTLY 5 questions (no more, no less)
+- Generate EXACTLY 3 questions (no more, no less)
 - ALL questions must be type "multiple_choice" (NO short_answer questions)
 - ALL questions must have difficulty "easy" (NO medium or hard)
 - Use actual memory IDs from the provided memories in related_memory_ids
@@ -806,8 +806,8 @@ Important:
                 raise ValueError("Survey must be a JSON array")
             
             # Validate question count
-            if len(survey_json) != 5:
-                raise ValueError(f"Survey must have exactly 5 questions, but got {len(survey_json)}")
+            if len(survey_json) != 3:
+                raise ValueError(f"Survey must have exactly 3 questions, but got {len(survey_json)}")
             
             # Validate each question
             for i, question in enumerate(survey_json):

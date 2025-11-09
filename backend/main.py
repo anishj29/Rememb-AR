@@ -28,7 +28,8 @@ app.add_middleware(
 )
 
 # Initialize Firebase Admin SDK
-cred = credentials.Certificate("healthhacks2025-71347-firebase-adminsdk-fbsvc-f2fcdb36d1.json")
+FIREBASE_KEY = os.getenv("FIREBASE_KEY")
+cred = credentials.Certificate(FIREBASE_KEY)
 firebase_admin.initialize_app(cred, {
     "storageBucket": "healthhacks2025-71347.firebasestorage.app"
 })
@@ -38,6 +39,7 @@ bucket = storage.bucket()
 
 # Initialize Gemini API
 GEMINI_KEY = os.getenv("GEMINI_KEY")
+
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
 
